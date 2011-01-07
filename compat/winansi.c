@@ -4,18 +4,13 @@
 
 #undef NOGDI
 #include "../git-compat-util.h"
-#include <malloc.h>
 #include <wingdi.h>
 #include <winreg.h>
 
 /*
  Functions to be wrapped:
 */
-#undef printf
-#undef fprintf
-#undef fputs
-#undef vfprintf
-/* TODO: write */
+#undef isatty
 
 /*
  ANSI codes used by git: m, K
@@ -28,8 +23,10 @@ static HANDLE console;
 static WORD plain_attr;
 static WORD attr;
 static int negative;
-static FILE *last_stream = NULL;
 static int non_ascii_used = 0;
+static HANDLE hthread, hread, hwrite;
+static HANDLE hwrite1 = INVALID_HANDLE_VALUE, hwrite2 = INVALID_HANDLE_VALUE;
+static HANDLE hconsole1, hconsole2;
 
 #ifdef __MINGW32__
 typedef struct _CONSOLE_FONT_INFOEX {
@@ -74,62 +71,37 @@ static void warn_if_raster_font(void)
 		}
 	}
 
-	if (!(fontFamily & TMPF_TRUETYPE))
-		warning("Your console font probably doesn\'t support "
-			"Unicode. If you experience strange characters in the output, "
-			"consider switching to a TrueType font such as Lucida Console!");
+	if (!(fontFamily & TMPF_TRUETYPE)) {
+		const wchar_t *msg = L"\nWarning: Your console font probably doesn\'t "
+			L"support Unicode. If you experience strange characters in the "
+			L"output, consider switching to a TrueType font such as Lucida "
+			L"Console!\n";
+		WriteConsoleW(console, msg, wcslen(msg), NULL, NULL);
+	}
 }
 
-static int is_console(FILE *stream)
+static int is_console(int fd)
 {
 	CONSOLE_SCREEN_BUFFER_INFO sbi;
 	HANDLE hcon;
 
-	static int initialized = 0;
-
-	/* use cached value if stream hasn't changed */
-	if (stream == last_stream)
-		return console != NULL;
-
-	last_stream = stream;
-	console = NULL;
-
-	/* get OS handle of the stream */
-	hcon = (HANDLE) _get_osfhandle(_fileno(stream));
+	/* get OS handle of the file descriptor */
+	hcon = (HANDLE) _get_osfhandle(fd);
 	if (hcon == INVALID_HANDLE_VALUE)
+		return 0;
+
+	/* check if its a device (i.e. console, printer, serial port) */
+	if (GetFileType(hcon) != FILE_TYPE_CHAR)
 		return 0;
 
 	/* check if its a handle to a console output screen buffer */
 	if (!GetConsoleScreenBufferInfo(hcon, &sbi))
 		return 0;
 
-	if (!initialized) {
-		attr = plain_attr = sbi.wAttributes;
-		negative = 0;
-		initialized = 1;
-		/* check console font on exit */
-		atexit(warn_if_raster_font);
-	}
-
-	console = hcon;
+	/* initialize attributes */
+	attr = plain_attr = sbi.wAttributes;
+	negative = 0;
 	return 1;
-}
-
-static int write_console(const char *str, size_t len)
-{
-	/* convert utf-8 to utf-16, write directly to console */
-	int wlen = MultiByteToWideChar(CP_UTF8, 0, str, len, NULL, 0);
-	wchar_t *wbuf = (wchar_t *) alloca(wlen * sizeof(wchar_t));
-	MultiByteToWideChar(CP_UTF8, 0, str, len, wbuf, wlen);
-
-	WriteConsoleW(console, wbuf, wlen, NULL, NULL);
-
-	/* remember if non-ascii characters are printed */
-	if (wlen != len)
-		non_ascii_used = 1;
-
-	/* return original (utf-8 encoded) length */
-	return len;
 }
 
 #define FOREGROUND_ALL (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE)
@@ -175,18 +147,13 @@ static void erase_in_line(void)
 		&dummy);
 }
 
-
-static const char *set_attr(const char *str)
+static void set_attr(char func, const int *params, int paramlen)
 {
-	const char *func;
-	size_t len = strspn(str, "0123456789;");
-	func = str + len;
-
-	switch (*func) {
+	int i;
+	switch (func) {
 	case 'm':
-		do {
-			long val = strtol(str, (char **)&str, 10);
-			switch (val) {
+		for (i = 0; i < paramlen; i++) {
+			switch (params[i]) {
 			case 0: /* reset */
 				attr = plain_attr;
 				negative = 0;
@@ -309,9 +276,7 @@ static const char *set_attr(const char *str)
 				/* Unsupported code */
 				break;
 			}
-			str++;
-		} while (*(str-1) == ';');
-
+		}
 		set_console_attr();
 		break;
 	case 'K':
@@ -321,112 +286,232 @@ static const char *set_attr(const char *str)
 		/* Unsupported code */
 		break;
 	}
-
-	return func + 1;
 }
 
-static int ansi_emulate(const char *str, FILE *stream)
+#define BUFFER_SIZE 4096
+#define MAX_PARAMS 16
+
+static void write_console(char *str, size_t len)
 {
-	int rv = 0;
-	const char *pos = str;
+	/* only called from console_thread, so a static buffer will do */
+	static wchar_t wbuf[2 * BUFFER_SIZE + 1];
 
-	fflush(stream);
+	/* convert utf-8 to utf-16 */
+	int wlen = utftowcsn(wbuf, str, 2 * BUFFER_SIZE + 1, len);
 
-	while (*pos) {
-		pos = strstr(str, "\033[");
-		if (pos) {
-			size_t len = pos - str;
+	/* write directly to console */
+	WriteConsoleW(console, wbuf, wlen, NULL, NULL);
 
-			if (len) {
-				size_t out_len = write_console(str, len);
-				rv += out_len;
-				if (out_len < len)
-					return rv;
-			}
+	/* remember if non-ascii characters are printed */
+	if (wlen != len)
+		non_ascii_used = 1;
+}
 
-			str = pos + 2;
-			rv += 2;
+enum {
+	TEXT = 0, ESCAPE = 033, BRACKET = '[', EXIT = -1
+};
 
-			pos = set_attr(str);
-			rv += pos - str;
-			str = pos;
-		} else {
-			size_t len = strlen(str);
-			rv += write_console(str, len);
-			return rv;
+static DWORD WINAPI console_thread(LPVOID unused)
+{
+	char buffer[BUFFER_SIZE];
+	DWORD bytes;
+	int start, end, c, parampos = 0, state = TEXT;
+	int params[MAX_PARAMS];
+
+	while (state != EXIT) {
+		/* read next chunk of bytes from the pipe */
+		if (!ReadFile(hread, buffer, BUFFER_SIZE, &bytes, NULL)) {
+			/* exit if pipe has been closed */
+			if (GetLastError() == ERROR_BROKEN_PIPE)
+				break;
+			/* ignore other errors */
+			continue;
 		}
+
+		/* scan the bytes and handle ANSI control codes */
+		start = end = 0;
+		while (end < bytes) {
+			c = buffer[end++];
+			switch (state) {
+			case TEXT:
+				if (c == ESCAPE) {
+					/* print text seen so far */
+					if (end - 1 > start)
+						write_console(buffer + start, end - 1 - start);
+
+					/* then start parsing escape sequence */
+					start = end - 1;
+					memset(params, 0, sizeof(params));
+					parampos = 0;
+					state = ESCAPE;
+				}
+				break;
+
+			case ESCAPE:
+				/* continue if "\033[", otherwise bail out */
+				state = (c == BRACKET) ? BRACKET : TEXT;
+				break;
+
+			case BRACKET:
+				/* parse [0-9;]* into array of parameters */
+				if (c >= '0' && c <= '9') {
+					params[parampos] *= 10;
+					params[parampos] += c - '0';
+				} else if (c == ';') {
+					/* next parameter, bail out if out of bounds */
+					parampos++;
+					if (parampos >= MAX_PARAMS)
+						state = TEXT;
+				} else if (c == 'q') {
+					/* "\033[q": terminate the thread */
+					state = EXIT;
+				} else {
+					/* end of escape sequence, change console attributes */
+					set_attr(c, params, parampos + 1);
+					start = end;
+					state = TEXT;
+				}
+				break;
+			}
+		}
+
+		/* print remaining text unless we're parsing an escape sequence */
+		if (state == TEXT && end > start)
+			write_console(buffer + start, end - start);
 	}
-	return rv;
+
+	/* check if the console font supports unicode */
+	warn_if_raster_font();
+
+	CloseHandle(hread);
+	return 0;
 }
 
-int winansi_fputs(const char *str, FILE *stream)
+static void winansi_exit(void)
 {
-	int rv;
+	DWORD dummy;
+	/* flush all streams */
+	_flushall();
 
-	if (!is_console(stream))
-		return fputs(str, stream);
+	/* close the write ends of the pipes */
+	if (hwrite1 != INVALID_HANDLE_VALUE)
+		CloseHandle(hwrite1);
+	if (hwrite2 != INVALID_HANDLE_VALUE)
+		CloseHandle(hwrite2);
 
-	rv = ansi_emulate(str, stream);
+	/* send termination sequence to the thread */
+	WriteFile(hwrite, "\033[q", 3, &dummy, NULL);
+	CloseHandle(hwrite);
 
-	if (rv >= 0)
-		return 0;
+	/* allow the thread to copy remaining data to the console */
+	WaitForSingleObject(hthread, 1000);
+	CloseHandle(hthread);
+}
+
+static void die_lasterr(const char *fmt, ...)
+{
+	va_list params;
+	va_start(params, fmt);
+	errno = err_win_to_posix(GetLastError());
+	die_errno(fmt, params);
+	va_end(params);
+}
+
+static HANDLE duplicate_handle(HANDLE hnd)
+{
+	HANDLE hresult, hproc = GetCurrentProcess();
+	if (!DuplicateHandle(hproc, hnd, hproc, &hresult, 0, TRUE,
+			DUPLICATE_SAME_ACCESS))
+		die_lasterr("DuplicateHandle(%li) failed", (long) hnd);
+	return hresult;
+}
+
+static HANDLE redirect_console(FILE *stream, HANDLE *phcon, int new_fd)
+{
+	/* get original console handle */
+	int fd = _fileno(stream);
+	HANDLE hcon = (HANDLE) _get_osfhandle(fd);
+	if (hcon == INVALID_HANDLE_VALUE)
+		die_errno("_get_osfhandle(%i) failed", fd);
+
+	/* save a copy to phcon and console (used by the background thread) */
+	console = *phcon = duplicate_handle(hcon);
+
+	/* duplicate new_fd over fd (closes fd and associated handle (hcon)) */
+	if (_dup2(new_fd, fd))
+		die_errno("_dup2(%i, %i) failed", new_fd, fd);
+
+	/* no buffering, or stdout / stderr will be out of sync */
+	setbuf(stream, NULL);
+	return (HANDLE) _get_osfhandle(fd);
+}
+
+void winansi_init(void)
+{
+	int con1, con2, hwrite_fd;
+
+	/* check if either stdout or stderr is a console output screen buffer */
+	con1 = is_console(1);
+	con2 = is_console(2);
+	if (!con1 && !con2)
+		return;
+
+	/* create an anonymous pipe */
+	if (!CreatePipe(&hread, &hwrite, NULL, BUFFER_SIZE))
+		die_lasterr("CreatePipe failed");
+
+	/* start console spool thread on the pipe's read end */
+	hthread = CreateThread(NULL, 0, console_thread, NULL, 0, NULL);
+	if (hthread == INVALID_HANDLE_VALUE)
+		die_lasterr("CreateThread(console_thread) failed");
+
+	/* schedule cleanup routine */
+	if (atexit(winansi_exit))
+		die_errno("atexit(winansi_exit) failed");
+
+	/* create a file descriptor for the write end of the pipe */
+	hwrite_fd = _open_osfhandle((long) duplicate_handle(hwrite), _O_BINARY);
+	if (hwrite_fd == -1)
+		die_errno("_open_osfhandle(%li) failed", (long) hwrite);
+
+	/* redirect stdout / stderr to the pipe */
+	if (con1)
+		hwrite1 = redirect_console(stdout, &hconsole1, hwrite_fd);
+	if (con2)
+		hwrite2 = redirect_console(stderr, &hconsole2, hwrite_fd);
+
+	/* close pipe file descriptor (also closes the duped hwrite) */
+	close(hwrite_fd);
+}
+
+static int is_same_handle(HANDLE hnd, int fd)
+{
+	return hnd != INVALID_HANDLE_VALUE && hnd == (HANDLE) _get_osfhandle(fd);
+}
+
+/*
+ * Return true if stdout / stderr is a pipe redirecting to the console.
+ */
+int winansi_isatty(int fd)
+{
+	if (fd == 1 && is_same_handle(hwrite1, 1))
+		return 1;
+	else if (fd == 2 && is_same_handle(hwrite2, 2))
+		return 1;
 	else
-		return EOF;
+		return isatty(fd);
 }
 
-int winansi_vfprintf(FILE *stream, const char *format, va_list list)
+/*
+ * Returns the real console handle if stdout / stderr is a pipe redirecting
+ * to the console. Allows spawn / exec to pass the console to the next process.
+ */
+HANDLE winansi_get_osfhandle(int fd)
 {
-	int len, rv;
-	char small_buf[256];
-	char *buf = small_buf;
-	va_list cp;
-
-	if (!is_console(stream))
-		goto abort;
-
-	va_copy(cp, list);
-	len = vsnprintf(small_buf, sizeof(small_buf), format, cp);
-	va_end(cp);
-
-	if (len > sizeof(small_buf) - 1) {
-		buf = malloc(len + 1);
-		if (!buf)
-			goto abort;
-
-		len = vsnprintf(buf, len + 1, format, list);
-	}
-
-	rv = ansi_emulate(buf, stream);
-
-	if (buf != small_buf)
-		free(buf);
-	return rv;
-
-abort:
-	rv = vfprintf(stream, format, list);
-	return rv;
-}
-
-int winansi_fprintf(FILE *stream, const char *format, ...)
-{
-	va_list list;
-	int rv;
-
-	va_start(list, format);
-	rv = winansi_vfprintf(stream, format, list);
-	va_end(list);
-
-	return rv;
-}
-
-int winansi_printf(const char *format, ...)
-{
-	va_list list;
-	int rv;
-
-	va_start(list, format);
-	rv = winansi_vfprintf(stdout, format, list);
-	va_end(list);
-
-	return rv;
+	if (fd == 1 && is_same_handle(hwrite1, 1))
+		return hconsole1;
+	else if (fd == 2 && is_same_handle(hwrite2, 2))
+		return hconsole2;
+	else
+		return (HANDLE) _get_osfhandle(fd);
 }
