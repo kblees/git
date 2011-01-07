@@ -112,7 +112,7 @@ proc write_update_indexinfo {fd pathList totalCnt batch after} {
 		set info [lindex $s 2]
 		if {$info eq {}} continue
 
-		puts -nonewline $fd "$info\t[encoding convertto $path]\0"
+		puts -nonewline $fd "$info\t[encoding convertto utf-8 $path]\0"
 		display_file $path $new
 	}
 
@@ -180,7 +180,7 @@ proc write_update_index {fd pathList totalCnt batch after} {
 		?M {set new M_}
 		?? {continue}
 		}
-		puts -nonewline $fd "[encoding convertto $path]\0"
+		puts -nonewline $fd "[encoding convertto utf-8 $path]\0"
 		display_file $path $new
 	}
 
@@ -241,7 +241,7 @@ proc write_checkout_index {fd pathList totalCnt batch after} {
 		?M -
 		?T -
 		?D {
-			puts -nonewline $fd "[encoding convertto $path]\0"
+			puts -nonewline $fd "[encoding convertto utf-8 $path]\0"
 			display_file $path ?_
 		}
 		}
