@@ -3,6 +3,8 @@
 
 /* Win32 define for porting git*/
 
+#include <io.h>
+
 /* disable const** -> void* warning (~130 warnings for realloc etc.) */
 #pragma warning(disable : 4090)
 
