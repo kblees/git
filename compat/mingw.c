@@ -779,38 +779,46 @@ static int do_putenv(char **env, char *name, int size, int free_old)
 	return size;
 }
 
-#undef getenv
+#define MIN_ENV_SIZE 16
+
+/*
+ * Allocated space for environ is always a power of 2 (with unused entries
+ * filled with NULL), so we can determine the size more efficiently.
+ */
+static inline int getenvsize()
+{
+	int envsz = MIN_ENV_SIZE;
+	while (environ[envsz - 1])
+		envsz <<= 1;
+	return envsz;
+}
+
 char *mingw_getenv(const char *name)
 {
-	char *result = getenv(name);
-	if (!result) {
-		if (!strcmp(name, "TMPDIR")) {
-			/* on Windows it is TMP and TEMP */
-			result = getenv("TMP");
-			if (!result)
-				result = getenv("TEMP");
-		} else if (!strcmp(name, "TERM")) {
-			/* simulate TERM to enable auto-color (see color.c) */
-			result = "winansi";
-		}
-	}
-	return result;
+	char *value;
+	int pos = bsearchenv(environ, name, getenvsize());
+	if (pos < 0)
+		return NULL;
+	value = strchr(environ[pos], '=');
+	return value ? &value[1] : NULL;
 }
 
 int mingw_putenv(char *namevalue)
 {
-	int i;
-	/* try to find and replace entry */
-	for (i = 0; environ[i]; i++)
-		if (!compareenv(&namevalue, &environ[i])) {
-			free(environ[i]);
-			environ[i] = namevalue;
-			return 0;
-		}
-	/* not found, append at the end */
-	environ = xrealloc(environ, (i + 2) * sizeof(char*));
-	environ[i] = namevalue;
-	environ[i + 1] = NULL;
+	int envsz;
+	if (!namevalue) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	envsz = getenvsize();
+	do_putenv(environ, namevalue, envsz, 1);
+
+	/* expand array if last slot is used */
+	if (environ[envsz - 1]) {
+		environ = xrealloc(environ, 2 * envsz * sizeof(char*));
+		memset(environ + envsz, 0, envsz * sizeof(char*));
+	}
 	return 0;
 }
 
@@ -1007,16 +1015,13 @@ static wchar_t *make_environment_block(char **env)
 	int i = 0, size = 0, envblksz = 0, envblkpos = 0;
 
 	/* get size of current environment + supplied changes */
-	while (environ[size])
-		size++;
-	size++; /* for terminating NULL */
+	size = getenvsize();
 	while (env && env[i])
 		i++;
 
-	/* copy and sort current environment, leaving space for changes */
+	/* copy (already sorted) current environment, leaving space for changes */
 	tmpenv = xcalloc(size + i, sizeof(char*));
 	memcpy(tmpenv, environ, size * sizeof(char*));
-	qsort(tmpenv, size, sizeof(char*), compareenv);
 
 	/* merge supplied environment changes into the temporary environment */
 	for (i = 0; env && env[i]; i++)
@@ -2052,8 +2057,11 @@ void mingw_startup()
 	for (i = 0; wenv[i]; i++)
 		maxlen = max(maxlen, wcslen(wenv[i]));
 
+	/* ceil environment size to next power of 2 (see getenvsize()) */
+	for (len = MIN_ENV_SIZE; len <= i; )
+		len <<= 1;
 	/* nedmalloc can't free CRT memory, allocate resizable environment list */
-	environ = xcalloc(i + 1, sizeof(char*));
+	environ = xcalloc(len, sizeof(char*));
 
 	/* allocate buffer (wchar_t encodes to max 3 UTF-8 bytes) */
 	maxlen = 3 * maxlen + 1;
@@ -2071,6 +2079,24 @@ void mingw_startup()
 		environ[i] = xmemdupz(buffer, len);
 	}
 	free(buffer);
+
+	/* sort environment for O(log n) getenv / putenv */
+	qsort(environ, i, sizeof(char*), compareenv);
+
+	/* fix Windows specific environment settings */
+
+	/* on Windows it is TMP and TEMP */
+	if (!getenv("TMPDIR")) {
+		const char *tmp = getenv("TMP");
+		if (!tmp)
+			tmp = getenv("TEMP");
+		if (tmp)
+			setenv("TMPDIR", tmp, 1);
+	}
+
+	/* simulate TERM to enable auto-color (see color.c) */
+	if (!getenv("TERM"))
+		setenv("TERM", "winansi", 1);
 
 	/* initialize critical section for waitpid pinfo_t list */
 	InitializeCriticalSection(&pinfo_cs);
