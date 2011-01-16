@@ -797,6 +797,23 @@ char *mingw_getenv(const char *name)
 	return result;
 }
 
+int mingw_putenv(char *namevalue)
+{
+	int i;
+	/* try to find and replace entry */
+	for (i = 0; environ[i]; i++)
+		if (!compareenv(&namevalue, &environ[i])) {
+			free(environ[i]);
+			environ[i] = namevalue;
+			return 0;
+		}
+	/* not found, append at the end */
+	environ = xrealloc(environ, (i + 2) * sizeof(char*));
+	environ[i] = namevalue;
+	environ[i + 1] = NULL;
+	return 0;
+}
+
 /*
  * See http://msdn2.microsoft.com/en-us/library/17w5ykft(vs.71).aspx
  * (Parsing C++ Command-Line Arguments)
@@ -2032,6 +2049,11 @@ void mingw_startup()
 	maxlen = wcslen(_wpgmptr);
 	for (i = 1; i < argc; i++)
 		maxlen = max(maxlen, wcslen(wargv[i]));
+	for (i = 0; wenv[i]; i++)
+		maxlen = max(maxlen, wcslen(wenv[i]));
+
+	/* nedmalloc can't free CRT memory, allocate resizable environment list */
+	environ = xcalloc(i + 1, sizeof(char*));
 
 	/* allocate buffer (wchar_t encodes to max 3 UTF-8 bytes) */
 	maxlen = 3 * maxlen + 1;
@@ -2043,6 +2065,10 @@ void mingw_startup()
 	for (i = 1; i < argc; i++) {
 		len = wcstoutf(buffer, wargv[i], maxlen);
 		__argv[i] = xmemdupz(buffer, len);
+	}
+	for (i = 0; wenv[i]; i++) {
+		len = wcstoutf(buffer, wenv[i], maxlen);
+		environ[i] = xmemdupz(buffer, len);
 	}
 	free(buffer);
 
