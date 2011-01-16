@@ -634,6 +634,79 @@ char *mingw_getcwd(char *pointer, int len)
 	return ret;
 }
 
+/*
+ * Compare environment entries by key (i.e. stopping at '=' or '\0').
+ */
+static int compareenv(const void *v1, const void *v2)
+{
+	const char *e1 = *(const char**)v1;
+	const char *e2 = *(const char**)v2;
+
+	/* sort NULL entries at the end */
+	if (!e1 || !e2)
+		return (e1 == e2) ? 0 : e1 ? -1 : 1;
+
+	for (;;) {
+		int c1 = *e1++;
+		int c2 = *e2++;
+		c1 = (c1 == '=') ? 0 : tolower(c1);
+		c2 = (c2 == '=') ? 0 : tolower(c2);
+		if (c1 > c2)
+			return 1;
+		if (c1 < c2)
+			return -1;
+		if (c1 == 0)
+			return 0;
+	}
+}
+
+static inline int bsearchenv(char **env, const char *name, size_t size)
+{
+	unsigned low = 0, high = size - 1;
+	while (low <= high) {
+		unsigned mid = (low + high) >> 1;
+		int cmp = compareenv(&env[mid], &name);
+		if	(cmp < 0)
+			low = mid + 1;
+		else if (cmp > 0)
+			high = mid - 1;
+		else
+			return mid; /* found */
+	}
+	return ~low; /* not found, return 1's complement of insert position */
+}
+
+/*
+ * Insert, replace (with 'key=value') or remove ('key=' or 'key') an entry from
+ * a sorted environment array. Size must include the terminating NULL (room for
+ * insert). Returns new size. Optionally frees removed or replaced entries.
+ */
+static int do_putenv(char **env, char *name, int size, int free_old)
+{
+	/* lookup existing entry with the same key */
+	int i = bsearchenv(env, name, size);
+	char *eq = strchr(name, '=');
+
+	/* optionally free removed / replaced entry */
+	if (i >= 0 && free_old)
+		free(env[i]);
+
+	if (eq && eq[1]) {
+		/* if new value ('key=value') is specified, insert or replace entry */
+		if (i < 0) {
+			i = ~i;
+			memmove(&env[i + 1], &env[i], (size - 1 - i) * sizeof(char*));
+			size++;
+		}
+		env[i] = name;
+	} else if (i >= 0) {
+		/* otherwise ('key=' or 'key') remove existing entry */
+		memmove(&env[i], &env[i + 1], (size - 1 - i) * sizeof(char*));
+		size--;
+	}
+	return size;
+}
+
 #undef getenv
 char *mingw_getenv(const char *name)
 {
@@ -834,11 +907,43 @@ static char *path_lookup(const char *cmd, char **path, int exe_only)
 	return prog;
 }
 
-static int env_compare(const void *a, const void *b)
+/*
+ * Create environment block suitable for CreateProcess. Merges current
+ * process environment and the supplied environment changes.
+ */
+static char *make_environment_block(char **env)
 {
-	char *const *ea = a;
-	char *const *eb = b;
-	return strcasecmp(*ea, *eb);
+	char **tmpenv, *envblk = NULL;
+	int i = 0, size = 0, envblksz = 0, envblkpos = 0;
+
+	/* get size of current environment + supplied changes */
+	while (environ[size])
+		size++;
+	size++; /* for terminating NULL */
+	while (env && env[i])
+		i++;
+
+	/* copy and sort current environment, leaving space for changes */
+	tmpenv = xcalloc(size + i, sizeof(char*));
+	memcpy(tmpenv, environ, size * sizeof(char*));
+	qsort(tmpenv, size, sizeof(char*), compareenv);
+
+	/* merge supplied environment changes into the temporary environment */
+	for (i = 0; env && env[i]; i++)
+		size = do_putenv(tmpenv, env[i], size, 0);
+
+	/* create environment block from temporary environment */
+	for (i = 0; tmpenv[i]; i++) {
+		size = strlen(tmpenv[i]) + 1;
+		ALLOC_GROW(envblk, envblkpos + size, envblksz);
+		memcpy(&envblk[envblkpos], tmpenv[i], size);
+		envblkpos += size;
+	}
+	free(tmpenv);
+	/* add final \0 terminator */
+	ALLOC_GROW(envblk, envblkpos + 1, envblksz);
+	envblk[envblkpos] = 0;
+	return envblk;
 }
 
 struct pinfo_t {
@@ -855,8 +960,9 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 {
 	STARTUPINFO si;
 	PROCESS_INFORMATION pi;
-	struct strbuf envblk, args;
-	unsigned flags;
+	struct strbuf args;
+	char *envblk;
+	unsigned flags = 0;
 	BOOL ret;
 
 	/* Determine whether or not we are associated to a console */
@@ -873,7 +979,7 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 		 * instead of CREATE_NO_WINDOW to make ssh
 		 * recognize that it has no console.
 		 */
-		flags = DETACHED_PROCESS;
+		flags |= DETACHED_PROCESS;
 	} else {
 		/* There is already a console. If we specified
 		 * DETACHED_PROCESS here, too, Windows would
@@ -881,7 +987,6 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 		 * The same is true for CREATE_NO_WINDOW.
 		 * Go figure!
 		 */
-		flags = 0;
 		CloseHandle(cons);
 	}
 	memset(&si, 0, sizeof(si));
@@ -908,32 +1013,13 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 			free(quoted);
 	}
 
-	if (env) {
-		int count = 0;
-		char **e, **sorted_env;
-
-		for (e = env; *e; e++)
-			count++;
-
-		/* environment must be sorted */
-		sorted_env = xmalloc(sizeof(*sorted_env) * (count + 1));
-		memcpy(sorted_env, env, sizeof(*sorted_env) * (count + 1));
-		qsort(sorted_env, count, sizeof(*sorted_env), env_compare);
-
-		strbuf_init(&envblk, 0);
-		for (e = sorted_env; *e; e++) {
-			strbuf_addstr(&envblk, *e);
-			strbuf_addch(&envblk, '\0');
-		}
-		free(sorted_env);
-	}
+	envblk = make_environment_block(env);
 
 	memset(&pi, 0, sizeof(pi));
-	ret = CreateProcess(cmd, args.buf, NULL, NULL, TRUE, flags,
-		env ? envblk.buf : NULL, dir, &si, &pi);
+	ret = CreateProcess(cmd, args.buf, NULL, NULL, TRUE, flags, envblk,
+			dir, &si, &pi);
 
-	if (env)
-		strbuf_release(&envblk);
+	free(envblk);
 	strbuf_release(&args);
 
 	if (!ret) {
@@ -1092,80 +1178,6 @@ int mingw_kill(pid_t pid, int sig)
 
 	errno = EINVAL;
 	return -1;
-}
-
-static char **copy_environ(void)
-{
-	char **env;
-	int i = 0;
-	while (environ[i])
-		i++;
-	env = xmalloc((i+1)*sizeof(*env));
-	for (i = 0; environ[i]; i++)
-		env[i] = xstrdup(environ[i]);
-	env[i] = NULL;
-	return env;
-}
-
-void free_environ(char **env)
-{
-	int i;
-	for (i = 0; env[i]; i++)
-		free(env[i]);
-	free(env);
-}
-
-static int lookup_env(char **env, const char *name, size_t nmln)
-{
-	int i;
-
-	for (i = 0; env[i]; i++) {
-		if (0 == strncmp(env[i], name, nmln)
-		    && '=' == env[i][nmln])
-			/* matches */
-			return i;
-	}
-	return -1;
-}
-
-/*
- * If name contains '=', then sets the variable, otherwise it unsets it
- */
-static char **env_setenv(char **env, const char *name)
-{
-	char *eq = strchrnul(name, '=');
-	int i = lookup_env(env, name, eq-name);
-
-	if (i < 0) {
-		if (*eq) {
-			for (i = 0; env[i]; i++)
-				;
-			env = xrealloc(env, (i+2)*sizeof(*env));
-			env[i] = xstrdup(name);
-			env[i+1] = NULL;
-		}
-	}
-	else {
-		free(env[i]);
-		if (*eq)
-			env[i] = xstrdup(name);
-		else
-			for (; env[i]; i++)
-				env[i] = env[i+1];
-	}
-	return env;
-}
-
-/*
- * Copies global environ and adjusts variables as specified by vars.
- */
-char **make_augmented_environ(const char *const *vars)
-{
-	char **env = copy_environ();
-
-	while (*vars)
-		env = env_setenv(env, *vars++);
-	return env;
 }
 
 /*
