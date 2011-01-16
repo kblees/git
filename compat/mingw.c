@@ -983,9 +983,10 @@ static char *path_lookup(const char *cmd, char **path, int exe_only)
  * Create environment block suitable for CreateProcess. Merges current
  * process environment and the supplied environment changes.
  */
-static char *make_environment_block(char **env)
+static wchar_t *make_environment_block(char **env)
 {
-	char **tmpenv, *envblk = NULL;
+	char **tmpenv;
+	wchar_t *envblk = NULL;
 	int i = 0, size = 0, envblksz = 0, envblkpos = 0;
 
 	/* get size of current environment + supplied changes */
@@ -1006,14 +1007,14 @@ static char *make_environment_block(char **env)
 
 	/* create environment block from temporary environment */
 	for (i = 0; tmpenv[i]; i++) {
-		size = strlen(tmpenv[i]) + 1;
-		ALLOC_GROW(envblk, envblkpos + size, envblksz);
-		memcpy(&envblk[envblkpos], tmpenv[i], size);
-		envblkpos += size;
+		size = 2 * strlen(tmpenv[i]) + 1;
+		ALLOC_GROW(envblk, (envblkpos + size) * sizeof(wchar_t), envblksz);
+		size = utftowcs(&envblk[envblkpos], tmpenv[i], size);
+		envblkpos += size + 1;
 	}
 	free(tmpenv);
 	/* add final \0 terminator */
-	ALLOC_GROW(envblk, envblkpos + 1, envblksz);
+	ALLOC_GROW(envblk, (envblkpos + 1) * sizeof(wchar_t), envblksz);
 	envblk[envblkpos] = 0;
 	return envblk;
 }
@@ -1033,9 +1034,8 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 	STARTUPINFOW si;
 	PROCESS_INFORMATION pi;
 	struct strbuf args;
-	char *envblk;
-	wchar_t wcmd[MAX_PATH], wdir[MAX_PATH], *wargs;
-	unsigned flags = 0;
+	wchar_t *envblk, wcmd[MAX_PATH], wdir[MAX_PATH], *wargs;
+	unsigned flags = CREATE_UNICODE_ENVIRONMENT;
 	BOOL ret;
 
 	/* Determine whether or not we are associated to a console */
