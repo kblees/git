@@ -1030,10 +1030,11 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 			      const char *dir,
 			      int prepend_cmd, int fhin, int fhout, int fherr)
 {
-	STARTUPINFO si;
+	STARTUPINFOW si;
 	PROCESS_INFORMATION pi;
 	struct strbuf args;
 	char *envblk;
+	wchar_t wcmd[MAX_PATH], wdir[MAX_PATH], *wargs;
 	unsigned flags = 0;
 	BOOL ret;
 
@@ -1068,6 +1069,11 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 	si.hStdOutput = (HANDLE) _get_osfhandle(fhout);
 	si.hStdError = (HANDLE) _get_osfhandle(fherr);
 
+	if (utftowcs(wcmd, cmd, MAX_PATH) < 0)
+		return -1;
+	if (dir && utftowcs(wdir, dir, MAX_PATH) < 0)
+		return -1;
+
 	/* concatenate argv, quoting args as we go */
 	strbuf_init(&args, 0);
 	if (prepend_cmd) {
@@ -1085,14 +1091,18 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 			free(quoted);
 	}
 
+	wargs = xmalloc((2 * args.len + 1) * sizeof(wchar_t));
+	utftowcs(wargs, args.buf, 2 * args.len + 1);
+	strbuf_release(&args);
+
 	envblk = make_environment_block(env);
 
 	memset(&pi, 0, sizeof(pi));
-	ret = CreateProcess(cmd, args.buf, NULL, NULL, TRUE, flags, envblk,
-			dir, &si, &pi);
+	ret = CreateProcessW(wcmd, wargs, NULL, NULL, TRUE, flags, envblk,
+			dir ? wdir : NULL, &si, &pi);
 
 	free(envblk);
-	strbuf_release(&args);
+	free(wargs);
 
 	if (!ret) {
 		errno = ENOENT;
