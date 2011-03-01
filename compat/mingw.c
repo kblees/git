@@ -737,21 +737,79 @@ char *mingw_getcwd(char *pointer, int len)
 	return pointer;
 }
 
-#undef getenv
+static char *do_getenv(const char *name)
+{
+	static char *value = NULL;
+	static int value_alloc = 0;
+	wchar_t *wname, *wvalue;
+	int len;
+
+	/* convert name to wchar_t* */
+	len = strlen(name) * 2 + 1;
+	wname = xmalloc(len * sizeof(wchar_t));
+	utftowcs(wname, name, len);
+
+	/* get environment value */
+	wvalue = _wgetenv(wname);
+	free(wname);
+	if (!wvalue)
+		return NULL;
+
+	/* convert returned value back to char* */
+	len = wcslen(wvalue) * 3 + 1;
+	ALLOC_GROW(value, len, value_alloc);
+	wcstoutf(value, wvalue, len);
+	return value;
+}
+
 char *mingw_getenv(const char *name)
 {
-	char *result = getenv(name);
+	char *result = do_getenv(name);
 	if (!result) {
 		if (!strcmp(name, "TMPDIR")) {
 			/* on Windows it is TMP and TEMP */
-			result = getenv("TMP");
+			result = do_getenv("TMP");
 			if (!result)
-				result = getenv("TEMP");
+				result = do_getenv("TEMP");
 		} else if (!strcmp(name, "TERM")) {
 			/* simulate TERM to enable auto-color (see color.c) */
 			result = "winansi";
 		}
 	}
+	return result;
+}
+
+int mingw_putenv(char *namevalue)
+{
+	wchar_t *wnamevalue;
+	int len, result;
+
+	/* convert name to wchar_t* */
+	len = strlen(namevalue) * 2 + 2;
+	wnamevalue = xmalloc(len * sizeof(wchar_t));
+	utftowcs(wnamevalue, namevalue, len);
+
+	/* set environment variable */
+	result = _wputenv(wnamevalue);
+	free(wnamevalue);
+	free(namevalue);
+	return result;
+}
+
+int mingw_unsetenv(const char *name)
+{
+	wchar_t *wname;
+	int len, result;
+
+	/* convert name to wchar_t*, leave space for '=' */
+	len = strlen(name) * 2 + 2;
+	wname = xmalloc(len * sizeof(wchar_t));
+	utftowcs(wname, name, len);
+
+	/* MSVCRT putenv needs "name=" to remove an entry, so add '=' to name */
+	wcscat(wname, L"=");
+	result = _wputenv(wname);
+	free(wname);
 	return result;
 }
 
