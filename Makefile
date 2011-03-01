@@ -242,6 +242,9 @@ all::
 # dependency rules.
 #
 # Define NATIVE_CRLF if your platform uses CRLF for line endings.
+#
+# Define UNSAFE_GETENV if getenv isn't thread-safe or overwrites it's own
+# return values.
 
 GIT-VERSION-FILE: FORCE
 	@$(SHELL_PATH) ./GIT-VERSION-GEN
@@ -1408,6 +1411,10 @@ endif
 ifdef NO_SETENV
 	COMPAT_CFLAGS += -DNO_SETENV
 	COMPAT_OBJS += compat/setenv.o
+endif
+ifdef UNSAFE_GETENV
+	COMPAT_CFLAGS += -DUNSAFE_GETENV
+	COMPAT_OBJS += compat/safe-getenv.o
 endif
 ifdef NO_MKDTEMP
 	COMPAT_CFLAGS += -DNO_MKDTEMP
