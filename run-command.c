@@ -317,7 +317,7 @@ fail_pipe:
 {
 	int fhin = 0, fhout = 1, fherr = 2;
 	const char **sargv = cmd->argv;
-	char **env = environ;
+	wchar_t **wenv = _wenviron;
 
 	if (cmd->no_stdin)
 		fhin = open("/dev/null", O_RDWR);
@@ -343,7 +343,7 @@ fail_pipe:
 		fhout = dup(cmd->out);
 
 	if (cmd->env)
-		env = make_augmented_environ(cmd->env);
+		wenv = make_augmented_environ(cmd->env);
 
 	if (cmd->git_cmd) {
 		cmd->argv = prepare_git_cmd(cmd->argv);
@@ -351,14 +351,14 @@ fail_pipe:
 		cmd->argv = prepare_shell_cmd(cmd->argv);
 	}
 
-	cmd->pid = mingw_spawnvpe(cmd->argv[0], cmd->argv, env, cmd->dir,
+	cmd->pid = mingw_spawnvpe(cmd->argv[0], cmd->argv, wenv, cmd->dir,
 				  fhin, fhout, fherr);
 	failed_errno = errno;
 	if (cmd->pid < 0 && (!cmd->silent_exec_failure || errno != ENOENT))
 		error("cannot spawn %s: %s", cmd->argv[0], strerror(errno));
 
 	if (cmd->env)
-		free_environ(env);
+		free_environ(wenv);
 	if (cmd->git_cmd)
 		free(cmd->argv);
 

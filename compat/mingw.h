@@ -204,6 +204,10 @@ int mingw_putenv(char *namevalue);
 int mingw_unsetenv(const char *name);
 #define unsetenv mingw_unsetenv
 
+/* we don't have a UTF-8 encoded char **environ, prevent accidental usage */
+#undef environ
+#define environ environ_not_supported
+
 struct hostent *mingw_gethostbyname(const char *host);
 #define gethostbyname mingw_gethostbyname
 
@@ -279,7 +283,7 @@ int mingw_fstat(int fd, struct stat *buf);
 int mingw_utime(const char *file_name, const struct utimbuf *times);
 #define utime mingw_utime
 
-pid_t mingw_spawnvpe(const char *cmd, const char **argv, char **env,
+pid_t mingw_spawnvpe(const char *cmd, const char **argv, wchar_t **env,
 		     const char *dir,
 		     int fhin, int fhout, int fherr);
 void mingw_execvp(const char *cmd, char *const *argv);
@@ -324,8 +328,8 @@ void mingw_mark_as_git_dir(const char *dir);
  * helpers
  */
 
-char **make_augmented_environ(const char *const *vars);
-void free_environ(char **env);
+wchar_t **make_augmented_environ(const char *const *vars);
+void free_environ(wchar_t **env);
 
 /**
  * Converts UTF-8 encoded string to UTF-16LE.

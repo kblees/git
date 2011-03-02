@@ -997,9 +997,9 @@ static char *path_lookup(const char *cmd, char **path, int exe_only)
 
 static int env_compare(const void *a, const void *b)
 {
-	char *const *ea = a;
-	char *const *eb = b;
-	return strcasecmp(*ea, *eb);
+	wchar_t *const *ea = a;
+	wchar_t *const *eb = b;
+	return wcsicmp(*ea, *eb);
 }
 
 struct pinfo_t {
@@ -1010,15 +1010,15 @@ struct pinfo_t {
 struct pinfo_t *pinfo = NULL;
 CRITICAL_SECTION pinfo_cs;
 
-static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
+static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, wchar_t **wenv,
 			      const char *dir,
 			      int prepend_cmd, int fhin, int fhout, int fherr)
 {
 	STARTUPINFOW si;
 	PROCESS_INFORMATION pi;
-	struct strbuf envblk, args;
-	wchar_t wcmd[MAX_PATH], wdir[MAX_PATH], *wargs;
-	unsigned flags;
+	struct strbuf args;
+	wchar_t wcmd[MAX_PATH], wdir[MAX_PATH], *wargs, *wenvblk = NULL;
+	unsigned flags = CREATE_UNICODE_ENVIRONMENT;
 	BOOL ret;
 
 	/* Determine whether or not we are associated to a console */
@@ -1035,7 +1035,7 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 		 * instead of CREATE_NO_WINDOW to make ssh
 		 * recognize that it has no console.
 		 */
-		flags = DETACHED_PROCESS;
+		flags |= DETACHED_PROCESS;
 	} else {
 		/* There is already a console. If we specified
 		 * DETACHED_PROCESS here, too, Windows would
@@ -1043,7 +1043,6 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 		 * The same is true for CREATE_NO_WINDOW.
 		 * Go figure!
 		 */
-		flags = 0;
 		CloseHandle(cons);
 	}
 	memset(&si, 0, sizeof(si));
@@ -1079,32 +1078,34 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 	utftowcs(wargs, args.buf, 2 * args.len + 1);
 	strbuf_release(&args);
 
-	if (env) {
-		int count = 0;
-		char **e, **sorted_env;
+	if (wenv) {
+		int count = 0, pos = 0, alloc = 0;
+		wchar_t **e, **sorted_env;
 
-		for (e = env; *e; e++)
+		for (e = wenv; *e; e++)
 			count++;
 
 		/* environment must be sorted */
 		sorted_env = xmalloc(sizeof(*sorted_env) * (count + 1));
-		memcpy(sorted_env, env, sizeof(*sorted_env) * (count + 1));
+		memcpy(sorted_env, wenv, sizeof(*sorted_env) * (count + 1));
 		qsort(sorted_env, count, sizeof(*sorted_env), env_compare);
 
-		strbuf_init(&envblk, 0);
 		for (e = sorted_env; *e; e++) {
-			strbuf_addstr(&envblk, *e);
-			strbuf_addch(&envblk, '\0');
+			int size = wcslen(*e);
+			ALLOC_GROW(wenvblk, (pos + size + 1) * sizeof(wchar_t), alloc);
+			wcscpy(wenvblk + pos, *e);
+			pos += size + 1;
 		}
+		ALLOC_GROW(wenvblk, (pos + 1) * sizeof(wchar_t), alloc);
+		wenvblk[pos] = 0;
 		free(sorted_env);
 	}
 
 	memset(&pi, 0, sizeof(pi));
 	ret = CreateProcessW(wcmd, wargs, NULL, NULL, TRUE, flags,
-		env ? envblk.buf : NULL, dir ? wdir : NULL, &si, &pi);
+		wenvblk, dir ? wdir : NULL, &si, &pi);
 
-	if (env)
-		strbuf_release(&envblk);
+	free(wenvblk);
 	free(wargs);
 
 	if (!ret) {
@@ -1134,13 +1135,13 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 	return (pid_t)pi.dwProcessId;
 }
 
-static pid_t mingw_spawnve(const char *cmd, const char **argv, char **env,
+static pid_t mingw_spawnve(const char *cmd, const char **argv, wchar_t **wenv,
 			   int prepend_cmd)
 {
-	return mingw_spawnve_fd(cmd, argv, env, NULL, prepend_cmd, 0, 1, 2);
+	return mingw_spawnve_fd(cmd, argv, wenv, NULL, prepend_cmd, 0, 1, 2);
 }
 
-pid_t mingw_spawnvpe(const char *cmd, const char **argv, char **env,
+pid_t mingw_spawnvpe(const char *cmd, const char **argv, wchar_t **wenv,
 		     const char *dir,
 		     int fhin, int fhout, int fherr)
 {
@@ -1164,14 +1165,14 @@ pid_t mingw_spawnvpe(const char *cmd, const char **argv, char **env,
 				pid = -1;
 			}
 			else {
-				pid = mingw_spawnve_fd(iprog, argv, env, dir, 1,
+				pid = mingw_spawnve_fd(iprog, argv, wenv, dir, 1,
 						       fhin, fhout, fherr);
 				free(iprog);
 			}
 			argv[0] = argv0;
 		}
 		else
-			pid = mingw_spawnve_fd(prog, argv, env, dir, 0,
+			pid = mingw_spawnve_fd(prog, argv, wenv, dir, 0,
 					       fhin, fhout, fherr);
 		free(prog);
 	}
@@ -1179,7 +1180,7 @@ pid_t mingw_spawnvpe(const char *cmd, const char **argv, char **env,
 	return pid;
 }
 
-static int try_shell_exec(const char *cmd, char *const *argv, char **env)
+static int try_shell_exec(const char *cmd, char *const *argv, wchar_t **wenv)
 {
 	const char *interpr = parse_interpreter(cmd);
 	char **path;
@@ -1197,7 +1198,7 @@ static int try_shell_exec(const char *cmd, char *const *argv, char **env)
 		argv2 = xmalloc(sizeof(*argv) * (argc+1));
 		argv2[0] = (char *)cmd;	/* full path to the script file */
 		memcpy(&argv2[1], &argv[1], sizeof(*argv) * argc);
-		pid = mingw_spawnve(prog, argv2, env, 1);
+		pid = mingw_spawnve(prog, argv2, wenv, 1);
 		if (pid >= 0) {
 			int status;
 			if (waitpid(pid, &status, 0) < 0)
@@ -1212,13 +1213,13 @@ static int try_shell_exec(const char *cmd, char *const *argv, char **env)
 	return pid;
 }
 
-static void mingw_execve(const char *cmd, char *const *argv, char *const *env)
+static void mingw_execve(const char *cmd, char *const *argv, wchar_t *const *wenv)
 {
 	/* check if git_command is a shell script */
-	if (!try_shell_exec(cmd, argv, (char **)env)) {
+	if (!try_shell_exec(cmd, argv, (wchar_t **)wenv)) {
 		int pid, status;
 
-		pid = mingw_spawnve(cmd, (const char **)argv, (char **)env, 0);
+		pid = mingw_spawnve(cmd, (const char **)argv, (wchar_t **)wenv, 0);
 		if (pid < 0)
 			return;
 		if (waitpid(pid, &status, 0) < 0)
@@ -1233,7 +1234,7 @@ void mingw_execvp(const char *cmd, char *const *argv)
 	char *prog = path_lookup(cmd, path, 0);
 
 	if (prog) {
-		mingw_execve(prog, argv, environ);
+		mingw_execve(prog, argv, _wenviron);
 		free(prog);
 	} else
 		errno = ENOENT;
@@ -1243,7 +1244,7 @@ void mingw_execvp(const char *cmd, char *const *argv)
 
 void mingw_execv(const char *cmd, char *const *argv)
 {
-	mingw_execve(cmd, argv, environ);
+	mingw_execve(cmd, argv, _wenviron);
 }
 
 int mingw_kill(pid_t pid, int sig)
@@ -1265,34 +1266,40 @@ int mingw_kill(pid_t pid, int sig)
 	return -1;
 }
 
-static char **copy_environ(void)
+static inline wchar_t *xwcsdup(const wchar_t *string)
 {
-	char **env;
+	int len = (wcslen(string) + 1) * sizeof(wchar_t);
+	return memcpy(xmalloc(len), string, len);
+}
+
+static wchar_t **copy_environ(void)
+{
+	wchar_t **wenv;
 	int i = 0;
-	while (environ[i])
+	while (_wenviron[i])
 		i++;
-	env = xmalloc((i+1)*sizeof(*env));
-	for (i = 0; environ[i]; i++)
-		env[i] = xstrdup(environ[i]);
-	env[i] = NULL;
-	return env;
+	wenv = xmalloc((i+1)*sizeof(*wenv));
+	for (i = 0; _wenviron[i]; i++)
+		wenv[i] = xwcsdup(_wenviron[i]);
+	wenv[i] = NULL;
+	return wenv;
 }
 
-void free_environ(char **env)
+void free_environ(wchar_t **wenv)
 {
 	int i;
-	for (i = 0; env[i]; i++)
-		free(env[i]);
-	free(env);
+	for (i = 0; wenv[i]; i++)
+		free(wenv[i]);
+	free(wenv);
 }
 
-static int lookup_env(char **env, const char *name, size_t nmln)
+static int lookup_env(wchar_t **wenv, const wchar_t *wname, size_t nmln)
 {
 	int i;
 
-	for (i = 0; env[i]; i++) {
-		if (0 == strncmp(env[i], name, nmln)
-		    && '=' == env[i][nmln])
+	for (i = 0; wenv[i]; i++) {
+		if (0 == wcsnicmp(wenv[i], wname, nmln)
+		    && L'=' == wenv[i][nmln])
 			/* matches */
 			return i;
 	}
@@ -1302,41 +1309,48 @@ static int lookup_env(char **env, const char *name, size_t nmln)
 /*
  * If name contains '=', then sets the variable, otherwise it unsets it
  */
-static char **env_setenv(char **env, const char *name)
+static wchar_t **env_setenv(wchar_t **wenv, const wchar_t *wname)
 {
-	char *eq = strchrnul(name, '=');
-	int i = lookup_env(env, name, eq-name);
+	wchar_t *eq = wcschr(wname, L'=');
+	int len = eq ? eq - wname : wcslen(wname);
+	int i = lookup_env(wenv, wname, len);
 
 	if (i < 0) {
-		if (*eq) {
-			for (i = 0; env[i]; i++)
+		if (eq) {
+			for (i = 0; wenv[i]; i++)
 				;
-			env = xrealloc(env, (i+2)*sizeof(*env));
-			env[i] = xstrdup(name);
-			env[i+1] = NULL;
+			wenv = xrealloc(wenv, (i + 2) * sizeof(*wenv));
+			wenv[i] = xwcsdup(wname);
+			wenv[i + 1] = NULL;
 		}
 	}
 	else {
-		free(env[i]);
-		if (*eq)
-			env[i] = xstrdup(name);
+		free(wenv[i]);
+		if (eq)
+			wenv[i] = xwcsdup(wname);
 		else
-			for (; env[i]; i++)
-				env[i] = env[i+1];
+			for (; wenv[i]; i++)
+				wenv[i] = wenv[i + 1];
 	}
-	return env;
+	return wenv;
 }
 
 /*
  * Copies global environ and adjusts variables as specified by vars.
  */
-char **make_augmented_environ(const char *const *vars)
+wchar_t **make_augmented_environ(const char *const *vars)
 {
-	char **env = copy_environ();
+	wchar_t *buf = NULL, **wenv = copy_environ();
+	int alloc = 0;
 
-	while (*vars)
-		env = env_setenv(env, *vars++);
-	return env;
+	for (; *vars; vars++) {
+		int size = 2 * strlen(*vars) + 1;
+		ALLOC_GROW(buf, size * sizeof(wchar_t), alloc);
+		utftowcs(buf, *vars, size);
+		wenv = env_setenv(wenv, buf);
+	}
+	free(buf);
+	return wenv;
 }
 
 /*
