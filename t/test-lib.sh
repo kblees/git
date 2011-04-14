@@ -528,6 +528,19 @@ test_expect_success () {
 	echo >&3 ""
 }
 
+# test if shell supports unicode, expect success if it does, otherwise failure
+test_expect_success_unicode () {
+tclsh -ÀÁÂ <<EOF
+	exit [expr {\$argv ne [lindex "-\u00c0\u00c1\u00c2" 0]}]
+EOF
+	if [ $? == 0 ]
+	then
+		test_expect_success "$@"
+	else
+		test_expect_failure "$@"
+	fi
+}
+
 # test_external runs external test scripts that provide continuous
 # test output about their progress, and succeeds/fails on
 # zero/non-zero exit code.  It outputs the test output on stdout even

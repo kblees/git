@@ -67,7 +67,7 @@ test_expect_success setup '
 	git config i18n.commitencoding UTF-8
 '
 
-test_expect_success 'format-patch output (ISO-8859-1)' '
+test_expect_success_unicode 'format-patch output (ISO-8859-1)' '
 	git config i18n.logoutputencoding ISO8859-1 &&
 
 	git format-patch --stdout master..HEAD^ >out-l1 &&
@@ -78,7 +78,7 @@ test_expect_success 'format-patch output (ISO-8859-1)' '
 	grep "^From: =?ISO8859-1?q?=C1=E9=ED=20=F3=FA?=" out-l2
 '
 
-test_expect_success 'format-patch output (UTF-8)' '
+test_expect_success_unicode 'format-patch output (UTF-8)' '
 	git config i18n.logoutputencoding UTF-8 &&
 
 	git format-patch --stdout master..HEAD^ >out-u1 &&
@@ -89,7 +89,7 @@ test_expect_success 'format-patch output (UTF-8)' '
 	grep "^From: =?UTF-8?q?=C3=81=C3=A9=C3=AD=20=C3=B3=C3=BA?=" out-u2
 '
 
-test_expect_success 'rebase (U/U)' '
+test_expect_success_unicode 'rebase (U/U)' '
 	# We want the result of rebase in UTF-8
 	git config i18n.commitencoding UTF-8 &&
 
@@ -108,7 +108,7 @@ test_expect_success 'rebase (U/U)' '
 	check_encoding 2
 '
 
-test_expect_success 'rebase (U/L)' '
+test_expect_success_unicode 'rebase (U/L)' '
 	git config i18n.commitencoding UTF-8 &&
 	git config i18n.logoutputencoding ISO8859-1 &&
 	. "$TEST_DIRECTORY"/t3901-utf8.txt &&
@@ -119,7 +119,7 @@ test_expect_success 'rebase (U/L)' '
 	check_encoding 2
 '
 
-test_expect_success 'rebase (L/L)' '
+test_expect_success_unicode 'rebase (L/L)' '
 	# In this test we want ISO-8859-1 encoded commits as the result
 	git config i18n.commitencoding ISO8859-1 &&
 	git config i18n.logoutputencoding ISO8859-1 &&
@@ -131,7 +131,7 @@ test_expect_success 'rebase (L/L)' '
 	check_encoding 2 8859
 '
 
-test_expect_success 'rebase (L/U)' '
+test_expect_success_unicode 'rebase (L/U)' '
 	# This is pathological -- use UTF-8 as intermediate form
 	# to get ISO-8859-1 results.
 	git config i18n.commitencoding ISO8859-1 &&
@@ -144,7 +144,7 @@ test_expect_success 'rebase (L/U)' '
 	check_encoding 2 8859
 '
 
-test_expect_success 'cherry-pick(U/U)' '
+test_expect_success_unicode 'cherry-pick(U/U)' '
 	# Both the commitencoding and logoutputencoding is set to UTF-8.
 
 	git config i18n.commitencoding UTF-8 &&
@@ -159,7 +159,7 @@ test_expect_success 'cherry-pick(U/U)' '
 	check_encoding 3
 '
 
-test_expect_success 'cherry-pick(L/L)' '
+test_expect_success_unicode 'cherry-pick(L/L)' '
 	# Both the commitencoding and logoutputencoding is set to ISO-8859-1
 
 	git config i18n.commitencoding ISO8859-1 &&
@@ -174,7 +174,7 @@ test_expect_success 'cherry-pick(L/L)' '
 	check_encoding 3 8859
 '
 
-test_expect_success 'cherry-pick(U/L)' '
+test_expect_success_unicode 'cherry-pick(U/L)' '
 	# Commitencoding is set to UTF-8 but logoutputencoding is ISO-8859-1
 
 	git config i18n.commitencoding UTF-8 &&
@@ -189,7 +189,7 @@ test_expect_success 'cherry-pick(U/L)' '
 	check_encoding 3
 '
 
-test_expect_success 'cherry-pick(L/U)' '
+test_expect_success_unicode 'cherry-pick(L/U)' '
 	# Again, the commitencoding is set to ISO-8859-1 but
 	# logoutputencoding is set to UTF-8.
 
@@ -205,7 +205,7 @@ test_expect_success 'cherry-pick(L/U)' '
 	check_encoding 3 8859
 '
 
-test_expect_success 'rebase --merge (U/U)' '
+test_expect_success_unicode 'rebase --merge (U/U)' '
 	git config i18n.commitencoding UTF-8 &&
 	git config i18n.logoutputencoding UTF-8 &&
 	. "$TEST_DIRECTORY"/t3901-utf8.txt &&
@@ -216,7 +216,7 @@ test_expect_success 'rebase --merge (U/U)' '
 	check_encoding 2
 '
 
-test_expect_success 'rebase --merge (U/L)' '
+test_expect_success_unicode 'rebase --merge (U/L)' '
 	git config i18n.commitencoding UTF-8 &&
 	git config i18n.logoutputencoding ISO8859-1 &&
 	. "$TEST_DIRECTORY"/t3901-utf8.txt &&
@@ -227,7 +227,7 @@ test_expect_success 'rebase --merge (U/L)' '
 	check_encoding 2
 '
 
-test_expect_success 'rebase --merge (L/L)' '
+test_expect_success_unicode 'rebase --merge (L/L)' '
 	# In this test we want ISO-8859-1 encoded commits as the result
 	git config i18n.commitencoding ISO8859-1 &&
 	git config i18n.logoutputencoding ISO8859-1 &&
@@ -239,7 +239,7 @@ test_expect_success 'rebase --merge (L/L)' '
 	check_encoding 2 8859
 '
 
-test_expect_success 'rebase --merge (L/U)' '
+test_expect_success_unicode 'rebase --merge (L/U)' '
 	# This is pathological -- use UTF-8 as intermediate form
 	# to get ISO-8859-1 results.
 	git config i18n.commitencoding ISO8859-1 &&

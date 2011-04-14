@@ -783,7 +783,7 @@ Subject: [PATCH] =?UTF-8?q?f=C3=B6=C3=B6=20bar=20f=C3=B6=C3=B6=20bar=20f=C3=B6?=
  =?UTF-8?q?=C3=B6=20bar=20f=C3=B6=C3=B6=20bar=20f=C3=B6=C3=B6=20bar=20f=C3=B6?=
  =?UTF-8?q?=C3=B6=20bar=20f=C3=B6=C3=B6=20bar?=
 EOF
-test_expect_success 'format-patch wraps extremely long headers (rfc2047)' '
+test_expect_success_unicode 'format-patch wraps extremely long headers (rfc2047)' '
 	rm -rf patches/ &&
 	echo content >>file &&
 	git add file &&
