@@ -737,6 +737,8 @@ char *mingw_getcwd(char *pointer, int len)
 	return pointer;
 }
 
+static char **env_setenv(char **env, const char *name, int free_old);
+
 #undef getenv
 char *mingw_getenv(const char *name)
 {
@@ -1020,17 +1022,28 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 	utftowcs(wargs, args.buf, 2 * args.len + 1);
 	strbuf_release(&args);
 
-	if (env) {
+	if (env == environ)
+		env = NULL;
+
+	{
 		int count = 0;
-		char **e, **sorted_env;
+		char **sorted_env;
 		int i = 0, size = 0, envblksz = 0, envblkpos = 0;
 
-		for (e = env; *e; e++)
+		while (environ[count])
 			count++;
 
-		/* environment must be sorted */
+		/* copy the environment */
 		sorted_env = xmalloc(sizeof(*sorted_env) * (count + 1));
-		memcpy(sorted_env, env, sizeof(*sorted_env) * (count + 1));
+		memcpy(sorted_env, environ, sizeof(*sorted_env) * (count + 1));
+
+		/* merge supplied environment changes into the temporary environment */
+		for (i = 0; env && env[i]; i++)
+			sorted_env = env_setenv(sorted_env, env[i], 0);
+
+		/* environment must be sorted */
+		for (count = 0; sorted_env[count]; count++)
+			;
 		qsort(sorted_env, count, sizeof(*sorted_env), env_compare);
 
 		/* create environment block from temporary environment */
@@ -1209,27 +1222,6 @@ int mingw_kill(pid_t pid, int sig)
 	return -1;
 }
 
-static char **copy_environ(void)
-{
-	char **env;
-	int i = 0;
-	while (environ[i])
-		i++;
-	env = xmalloc((i+1)*sizeof(*env));
-	for (i = 0; environ[i]; i++)
-		env[i] = xstrdup(environ[i]);
-	env[i] = NULL;
-	return env;
-}
-
-void free_environ(char **env)
-{
-	int i;
-	for (i = 0; env[i]; i++)
-		free(env[i]);
-	free(env);
-}
-
 static int lookup_env(char **env, const char *name, size_t nmln)
 {
 	int i;
@@ -1246,7 +1238,7 @@ static int lookup_env(char **env, const char *name, size_t nmln)
 /*
  * If name contains '=', then sets the variable, otherwise it unsets it
  */
-static char **env_setenv(char **env, const char *name)
+static char **env_setenv(char **env, const char *name, int free_old)
 {
 	char *eq = strchrnul(name, '=');
 	int i = lookup_env(env, name, eq-name);
@@ -1261,7 +1253,8 @@ static char **env_setenv(char **env, const char *name)
 		}
 	}
 	else {
-		free(env[i]);
+		if (free_old)
+			free(env[i]);
 		if (*eq)
 			env[i] = (char*) name;
 		else
@@ -1271,23 +1264,9 @@ static char **env_setenv(char **env, const char *name)
 	return env;
 }
 
-/*
- * Copies global environ and adjusts variables as specified by vars.
- */
-char **make_augmented_environ(const char *const *vars)
-{
-	char **env = copy_environ();
-
-	while (*vars) {
-		const char *v = *vars++;
-		env = env_setenv(env, strchr(v, '=') ? xstrdup(v) : v);
-	}
-	return env;
-}
-
 int mingw_putenv(const char *namevalue)
 {
-	environ = env_setenv(environ, namevalue);
+	environ = env_setenv(environ, namevalue, 1);
 	return 0;
 }
 
