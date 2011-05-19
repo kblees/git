@@ -740,10 +740,10 @@ char *mingw_getcwd(char *pointer, int len)
 /*
  * Compare environment entries by key (i.e. stopping at '=' or '\0').
  */
-static int env_compare(const void *a, const void *b)
+static int compareenv(const void *v1, const void *v2)
 {
-	const char *e1 = *(const char**)a;
-	const char *e2 = *(const char**)b;
+	const char *e1 = *(const char**)v1;
+	const char *e2 = *(const char**)v2;
 
 	for (;;) {
 		int c1 = *e1++;
@@ -759,12 +759,12 @@ static int env_compare(const void *a, const void *b)
 	}
 }
 
-static int lookup_env(char **env, const char *name, size_t size)
+static int bsearchenv(char **env, const char *name, size_t size)
 {
 	unsigned low = 0, high = size - 1;
 	while (low <= high) {
 		unsigned mid = (low + high) >> 1;
-		int cmp = env_compare(&env[mid], &name);
+		int cmp = compareenv(&env[mid], &name);
 		if	(cmp < 0)
 			low = mid + 1;
 		else if (cmp > 0)
@@ -780,9 +780,9 @@ static int lookup_env(char **env, const char *name, size_t size)
  * Size includes the terminating NULL. Env must have room for size + 1 entries
  * (in case of insert). Returns the new size. Optionally frees removed entries.
  */
-static int env_setenv(char **env, const char *name, int size, int free_old)
+static int do_putenv(char **env, const char *name, int size, int free_old)
 {
-	int i = lookup_env(env, name, size - 1);
+	int i = bsearchenv(env, name, size - 1);
 
 	/* optionally free removed / replaced entry */
 	if (i >= 0 && free_old)
@@ -812,7 +812,7 @@ static int environ_alloc = 0;
 char *mingw_getenv(const char *name)
 {
 	char *value;
-	int pos = lookup_env(environ, name, environ_size - 1);
+	int pos = bsearchenv(environ, name, environ_size - 1);
 	if (pos < 0)
 		return NULL;
 	value = strchr(environ[pos], '=');
@@ -822,7 +822,7 @@ char *mingw_getenv(const char *name)
 int mingw_putenv(const char *namevalue)
 {
 	ALLOC_GROW(environ, (environ_size + 1) * sizeof(char*), environ_alloc);
-	environ_size = env_setenv(environ, namevalue, environ_size, 1);
+	environ_size = do_putenv(environ, namevalue, environ_size, 1);
 	return 0;
 }
 
@@ -1015,29 +1015,29 @@ static char *path_lookup(const char *cmd, char **path, int exe_only)
 static wchar_t *make_environment_block(char **env)
 {
 	wchar_t *wenvblk = NULL;
-	char **sorted_env;
+	char **tmpenv;
 	int i = 0, size = environ_size, envblksz = 0, envblkpos = 0;
 
 	while (env && env[i])
 		i++;
 
 	/* copy the environment, leaving space for changes */
-	sorted_env = xmalloc((size + i) * sizeof(char*));
-	memcpy(sorted_env, environ, size * sizeof(char*));
+	tmpenv = xmalloc((size + i) * sizeof(char*));
+	memcpy(tmpenv, environ, size * sizeof(char*));
 
 	/* merge supplied environment changes into the temporary environment */
 	for (i = 0; env && env[i]; i++)
-		size = env_setenv(sorted_env, env[i], size, 0);
+		size = do_putenv(tmpenv, env[i], size, 0);
 
 	/* create environment block from temporary environment */
-	for (i = 0; sorted_env[i]; i++) {
-		size = 2 * strlen(sorted_env[i]) + 2;
+	for (i = 0; tmpenv[i]; i++) {
+		size = 2 * strlen(tmpenv[i]) + 2;
 		ALLOC_GROW(wenvblk, (envblkpos + size) * sizeof(wchar_t), envblksz);
-		envblkpos += utftowcs(&wenvblk[envblkpos], sorted_env[i], size) + 1;
+		envblkpos += utftowcs(&wenvblk[envblkpos], tmpenv[i], size) + 1;
 	}
 	/* add final \0 terminator */
 	wenvblk[envblkpos] = 0;
-	free(sorted_env);
+	free(tmpenv);
 	return wenvblk;
 }
 
@@ -2084,7 +2084,7 @@ void mingw_startup()
 	free(buffer);
 
 	/* sort environment for O(log n) getenv / putenv */
-	qsort(environ, i, sizeof(char*), env_compare);
+	qsort(environ, i, sizeof(char*), compareenv);
 
 	/* fix Windows specific environment settings */
 
