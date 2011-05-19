@@ -737,8 +737,72 @@ char *mingw_getcwd(char *pointer, int len)
 	return pointer;
 }
 
-static int lookup_env(char **env, const char *name, size_t size);
-static int env_setenv(char **env, const char *name, int size, int free_old);
+/*
+ * Compare environment entries by key (i.e. stopping at '=' or '\0').
+ */
+static int env_compare(const void *a, const void *b)
+{
+	const char *e1 = *(const char**)a;
+	const char *e2 = *(const char**)b;
+
+	for (;;) {
+		int c1 = *e1++;
+		int c2 = *e2++;
+		c1 = (c1 == '=') ? 0 : tolower(c1);
+		c2 = (c2 == '=') ? 0 : tolower(c2);
+		if (c1 > c2)
+			return 1;
+		if (c1 < c2)
+			return -1;
+		if (c1 == 0)
+			return 0;
+	}
+}
+
+static int lookup_env(char **env, const char *name, size_t size)
+{
+	unsigned low = 0, high = size - 1;
+	while (low <= high) {
+		unsigned mid = (low + high) >> 1;
+		int cmp = env_compare(&env[mid], &name);
+		if	(cmp < 0)
+			low = mid + 1;
+		else if (cmp > 0)
+			high = mid - 1;
+		else
+			return mid; /* found */
+	}
+	return ~low; /* not found, return 1's complement of insert position */
+}
+
+/*
+ * If name contains '=', then sets the variable, otherwise it unsets it
+ * Size includes the terminating NULL. Env must have room for size + 1 entries
+ * (in case of insert). Returns the new size. Optionally frees removed entries.
+ */
+static int env_setenv(char **env, const char *name, int size, int free_old)
+{
+	int i = lookup_env(env, name, size - 1);
+
+	/* optionally free removed / replaced entry */
+	if (i >= 0 && free_old)
+		free(env[i]);
+
+	if (strchr(name, '=')) {
+		/* if new value ('key=value') is specified, insert or replace entry */
+		if (i < 0) {
+			i = ~i;
+			memmove(&env[i + 1], &env[i], (size - i) * sizeof(char*));
+			size++;
+		}
+		env[i] = (char*) name;
+	} else if (i >= 0) {
+		/* otherwise ('key') remove existing entry */
+		size--;
+		memmove(&env[i], &env[i + 1], (size - i) * sizeof(char*));
+	}
+	return size;
+}
 
 /* used number of elements of environ array, including terminating NULL */
 static int environ_size = 0;
@@ -753,6 +817,13 @@ char *mingw_getenv(const char *name)
 		return NULL;
 	value = strchr(environ[pos], '=');
 	return value ? &value[1] : NULL;
+}
+
+int mingw_putenv(const char *namevalue)
+{
+	ALLOC_GROW(environ, (environ_size + 1) * sizeof(char*), environ_alloc);
+	environ_size = env_setenv(environ, namevalue, environ_size, 1);
+	return 0;
 }
 
 /*
@@ -935,28 +1006,6 @@ static char *path_lookup(const char *cmd, char **path, int exe_only)
 		prog = lookup_prog(*path++, cmd, isexe, exe_only);
 
 	return prog;
-}
-
-/*
- * Compare environment entries by key (i.e. stopping at '=' or '\0').
- */
-static int env_compare(const void *a, const void *b)
-{
-	const char *e1 = *(const char**)a;
-	const char *e2 = *(const char**)b;
-
-	for (;;) {
-		int c1 = *e1++;
-		int c2 = *e2++;
-		c1 = (c1 == '=') ? 0 : tolower(c1);
-		c2 = (c2 == '=') ? 0 : tolower(c2);
-		if (c1 > c2)
-			return 1;
-		if (c1 < c2)
-			return -1;
-		if (c1 == 0)
-			return 0;
-	}
 }
 
 /*
@@ -1236,58 +1285,6 @@ int mingw_kill(pid_t pid, int sig)
 
 	errno = EINVAL;
 	return -1;
-}
-
-static int lookup_env(char **env, const char *name, size_t size)
-{
-	unsigned low = 0, high = size - 1;
-	while (low <= high) {
-		unsigned mid = (low + high) >> 1;
-		int cmp = env_compare(&env[mid], &name);
-		if	(cmp < 0)
-			low = mid + 1;
-		else if (cmp > 0)
-			high = mid - 1;
-		else
-			return mid; /* found */
-	}
-	return ~low; /* not found, return 1's complement of insert position */
-}
-
-/*
- * If name contains '=', then sets the variable, otherwise it unsets it
- * Size includes the terminating NULL. Env must have room for size + 1 entries
- * (in case of insert). Returns the new size. Optionally frees removed entries.
- */
-static int env_setenv(char **env, const char *name, int size, int free_old)
-{
-	int i = lookup_env(env, name, size - 1);
-
-	/* optionally free removed / replaced entry */
-	if (i >= 0 && free_old)
-		free(env[i]);
-
-	if (strchr(name, '=')) {
-		/* if new value ('key=value') is specified, insert or replace entry */
-		if (i < 0) {
-			i = ~i;
-			memmove(&env[i + 1], &env[i], (size - i) * sizeof(char*));
-			size++;
-		}
-		env[i] = (char*) name;
-	} else if (i >= 0) {
-		/* otherwise ('key') remove existing entry */
-		size--;
-		memmove(&env[i], &env[i + 1], (size - i) * sizeof(char*));
-	}
-	return size;
-}
-
-int mingw_putenv(const char *namevalue)
-{
-	ALLOC_GROW(environ, (environ_size + 1) * sizeof(char*), environ_alloc);
-	environ_size = env_setenv(environ, namevalue, environ_size, 1);
-	return 0;
 }
 
 /*
