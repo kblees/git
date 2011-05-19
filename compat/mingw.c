@@ -959,6 +959,39 @@ static int env_compare(const void *a, const void *b)
 	}
 }
 
+/*
+ * Create environment block suitable for CreateProcess. Merges current
+ * process environment and the supplied environment changes.
+ */
+static wchar_t *make_environment_block(char **env)
+{
+	wchar_t *wenvblk = NULL;
+	char **sorted_env;
+	int i = 0, size = environ_size, envblksz = 0, envblkpos = 0;
+
+	while (env && env[i])
+		i++;
+
+	/* copy the environment, leaving space for changes */
+	sorted_env = xmalloc((size + i) * sizeof(char*));
+	memcpy(sorted_env, environ, size * sizeof(char*));
+
+	/* merge supplied environment changes into the temporary environment */
+	for (i = 0; env && env[i]; i++)
+		size = env_setenv(sorted_env, env[i], size, 0);
+
+	/* create environment block from temporary environment */
+	for (i = 0; sorted_env[i]; i++) {
+		size = 2 * strlen(sorted_env[i]) + 2;
+		ALLOC_GROW(wenvblk, (envblkpos + size) * sizeof(wchar_t), envblksz);
+		envblkpos += utftowcs(&wenvblk[envblkpos], sorted_env[i], size) + 1;
+	}
+	/* add final \0 terminator */
+	wenvblk[envblkpos] = 0;
+	free(sorted_env);
+	return wenvblk;
+}
+
 struct pinfo_t {
 	struct pinfo_t *next;
 	pid_t pid;
@@ -1038,31 +1071,7 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 	if (env == environ)
 		env = NULL;
 
-	{
-		char **sorted_env;
-		int i = 0, size = environ_size, envblksz = 0, envblkpos = 0;
-
-		while (env && env[i])
-			i++;
-
-		/* copy the environment, leaving space for changes */
-		sorted_env = xmalloc((size + i) * sizeof(char*));
-		memcpy(sorted_env, environ, size * sizeof(char*));
-
-		/* merge supplied environment changes into the temporary environment */
-		for (i = 0; env && env[i]; i++)
-			size = env_setenv(sorted_env, env[i], size, 0);
-
-		/* create environment block from temporary environment */
-		for (i = 0; sorted_env[i]; i++) {
-			size = 2 * strlen(sorted_env[i]) + 2;
-			ALLOC_GROW(wenvblk, (envblkpos + size) * sizeof(wchar_t), envblksz);
-			envblkpos += utftowcs(&wenvblk[envblkpos], sorted_env[i], size) + 1;
-		}
-		/* add final \0 terminator */
-		wenvblk[envblkpos] = 0;
-		free(sorted_env);
-	}
+	wenvblk = make_environment_block(env);
 
 	memset(&pi, 0, sizeof(pi));
 	ret = CreateProcessW(wcmd, wargs, NULL, NULL, TRUE, flags,
