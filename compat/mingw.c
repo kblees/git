@@ -1269,27 +1269,24 @@ static int lookup_env(char **env, const char *name, size_t size)
  */
 static int env_setenv(char **env, const char *name, int size, int free_old)
 {
-	char *eq = strchrnul(name, '=');
 	int i = lookup_env(env, name, size - 1);
 
-	if (i < 0) {
-		if (*eq) {
+	/* optionally free removed / replaced entry */
+	if (i >= 0 && free_old)
+		free(env[i]);
+
+	if (strchr(name, '=')) {
+		/* if new value ('key=value') is specified, insert or replace entry */
+		if (i < 0) {
 			i = ~i;
 			memmove(&env[i + 1], &env[i], (size - i) * sizeof(char*));
-			env[i] = (char*) name;
 			size++;
 		}
-	}
-	else {
-		if (free_old)
-			free(env[i]);
-		if (*eq)
-			env[i] = (char*) name;
-		else {
-			for (; env[i]; i++)
-				env[i] = env[i+1];
-			size--;
-		}
+		env[i] = (char*) name;
+	} else if (i >= 0) {
+		/* otherwise ('key') remove existing entry */
+		size--;
+		memmove(&env[i], &env[i + 1], (size - i) * sizeof(char*));
 	}
 	return size;
 }
