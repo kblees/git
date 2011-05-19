@@ -737,6 +737,7 @@ char *mingw_getcwd(char *pointer, int len)
 	return pointer;
 }
 
+static int lookup_env(char **env, const char *name, size_t size);
 static int env_setenv(char **env, const char *name, int size, int free_old);
 
 /* used number of elements of environ array, including terminating NULL */
@@ -744,16 +745,25 @@ static int environ_size = 0;
 /* allocated size of environ array, in bytes */
 static int environ_alloc = 0;
 
-#undef getenv
+static char *do_getenv(const char *name)
+{
+	char *value;
+	int pos = lookup_env(environ, name, environ_size - 1);
+	if (pos < 0)
+		return NULL;
+	value = strchr(environ[pos], '=');
+	return value ? &value[1] : NULL;
+}
+
 char *mingw_getenv(const char *name)
 {
-	char *result = getenv(name);
+	char *result = do_getenv(name);
 	if (!result) {
 		if (!strcmp(name, "TMPDIR")) {
 			/* on Windows it is TMP and TEMP */
-			result = getenv("TMP");
+			result = do_getenv("TMP");
 			if (!result)
-				result = getenv("TEMP");
+				result = do_getenv("TEMP");
 		} else if (!strcmp(name, "TERM")) {
 			/* simulate TERM to enable auto-color (see color.c) */
 			result = "winansi";
@@ -944,11 +954,26 @@ static char *path_lookup(const char *cmd, char **path, int exe_only)
 	return prog;
 }
 
+/*
+ * Compare environment entries by key (i.e. stopping at '=' or '\0').
+ */
 static int env_compare(const void *a, const void *b)
 {
-	char *const *ea = a;
-	char *const *eb = b;
-	return strcasecmp(*ea, *eb);
+	const char *e1 = *(const char**)a;
+	const char *e2 = *(const char**)b;
+
+	for (;;) {
+		int c1 = *e1++;
+		int c2 = *e2++;
+		c1 = (c1 == '=') ? 0 : tolower(c1);
+		c2 = (c2 == '=') ? 0 : tolower(c2);
+		if (c1 > c2)
+			return 1;
+		if (c1 < c2)
+			return -1;
+		if (c1 == 0)
+			return 0;
+	}
 }
 
 struct pinfo_t {
@@ -1044,9 +1069,6 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 		/* merge supplied environment changes into the temporary environment */
 		for (i = 0; env && env[i]; i++)
 			size = env_setenv(sorted_env, env[i], size, 0);
-
-		/* environment must be sorted */
-		qsort(sorted_env, size - 1, sizeof(char*), env_compare);
 
 		/* create environment block from temporary environment */
 		for (i = 0; sorted_env[i]; i++) {
@@ -1224,17 +1246,20 @@ int mingw_kill(pid_t pid, int sig)
 	return -1;
 }
 
-static int lookup_env(char **env, const char *name, size_t nmln)
+static int lookup_env(char **env, const char *name, size_t size)
 {
-	int i;
-
-	for (i = 0; env[i]; i++) {
-		if (0 == strncasecmp(env[i], name, nmln)
-		    && '=' == env[i][nmln])
-			/* matches */
-			return i;
+	unsigned low = 0, high = size - 1;
+	while (low <= high) {
+		unsigned mid = (low + high) >> 1;
+		int cmp = env_compare(&env[mid], &name);
+		if	(cmp < 0)
+			low = mid + 1;
+		else if (cmp > 0)
+			high = mid - 1;
+		else
+			return mid; /* found */
 	}
-	return -1;
+	return ~low; /* not found, return 1's complement of insert position */
 }
 
 /*
@@ -1245,12 +1270,13 @@ static int lookup_env(char **env, const char *name, size_t nmln)
 static int env_setenv(char **env, const char *name, int size, int free_old)
 {
 	char *eq = strchrnul(name, '=');
-	int i = lookup_env(env, name, eq-name);
+	int i = lookup_env(env, name, size - 1);
 
 	if (i < 0) {
 		if (*eq) {
-			env[size - 1] = (char*) name;
-			env[size] = NULL;
+			i = ~i;
+			memmove(&env[i + 1], &env[i], (size - i) * sizeof(char*));
+			env[i] = (char*) name;
 			size++;
 		}
 	}
@@ -2070,6 +2096,9 @@ void mingw_startup()
 	}
 	environ[i] = NULL;
 	free(buffer);
+
+	/* sort environment for O(log n) getenv / putenv */
+	qsort(environ, i, sizeof(char*), env_compare);
 
 	/* initialize critical section for waitpid pinfo_t list */
 	InitializeCriticalSection(&pinfo_cs);
