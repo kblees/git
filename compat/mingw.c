@@ -740,6 +740,7 @@ char *mingw_getcwd(char *pointer, int len)
 #undef getenv
 char *mingw_getenv(const char *name)
 {
+	double t = -ticks();
 	char *result = getenv(name);
 	if (!result) {
 		if (!strcmp(name, "TMPDIR")) {
@@ -752,6 +753,8 @@ char *mingw_getenv(const char *name)
 			result = "winansi";
 		}
 	}
+	t += ticks();
+	fprintf(stderr, "getenv %s: %g µs\n", name, t);
 	return result;
 }
 
@@ -1024,6 +1027,7 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 		int count = 0;
 		char **e, **sorted_env;
 		int i = 0, size = 0, envblksz = 0, envblkpos = 0;
+		double t = -ticks();
 
 		for (e = env; *e; e++)
 			count++;
@@ -1042,6 +1046,9 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 		/* add final \0 terminator */
 		wenvblk[envblkpos] = 0;
 		free(sorted_env);
+
+		t += ticks();
+		fprintf(stderr, "sort environment: %g µs\n", t);
 	}
 
 	memset(&pi, 0, sizeof(pi));
@@ -1225,9 +1232,12 @@ static char **copy_environ(void)
 void free_environ(char **env)
 {
 	int i;
+	double t = -ticks();
 	for (i = 0; env[i]; i++)
 		free(env[i]);
 	free(env);
+	t += ticks();
+	fprintf(stderr, "free_environ: %g µs\n", t);
 }
 
 static int lookup_env(char **env, const char *name, size_t nmln)
@@ -1276,10 +1286,13 @@ static char **env_setenv(char **env, const char *name)
  */
 char **make_augmented_environ(const char *const *vars)
 {
+	double t = -ticks();
 	char **env = copy_environ();
 
 	while (*vars)
 		env = env_setenv(env, *vars++);
+	t += ticks();
+	fprintf(stderr, "make_augmented_environ: %g µs\n", t);
 	return env;
 }
 
@@ -2050,6 +2063,7 @@ void mingw_startup()
 	char *buffer;
 	wchar_t **wenv, **wargv;
 	_startupinfo si;
+	double t;
 
 	/* get wide char arguments and environment */
 	si.newmode = 0;
@@ -2059,11 +2073,13 @@ void mingw_startup()
 	maxlen = wcslen(_wpgmptr);
 	for (i = 1; i < argc; i++)
 		maxlen = max(maxlen, wcslen(wargv[i]));
+	t = -ticks();
 	for (i = 0; wenv[i]; i++)
 		maxlen = max(maxlen, wcslen(wenv[i]));
 
 	/* nedmalloc can't free CRT memory, allocate resizable environment list */
 	environ = xcalloc(i + 1, sizeof(char*));
+	t += ticks();
 
 	/* allocate buffer (wchar_t encodes to max 3 UTF-8 bytes) */
 	maxlen = 3 * maxlen + 1;
@@ -2076,11 +2092,15 @@ void mingw_startup()
 		len = wcstoutf(buffer, wargv[i], maxlen);
 		__argv[i] = xmemdupz(buffer, len);
 	}
+	t -= ticks();
 	for (i = 0; wenv[i]; i++) {
 		len = wcstoutf(buffer, wenv[i], maxlen);
 		environ[i] = xmemdupz(buffer, len);
 	}
 	free(buffer);
+
+	t += ticks();
+	fprintf(stderr, "startup: %g µs\n", t);
 
 	/* initialize critical section for waitpid pinfo_t list */
 	InitializeCriticalSection(&pinfo_cs);
@@ -2093,4 +2113,17 @@ void mingw_startup()
 
 	/* initialize Unicode console */
 	winansi_init();
+}
+
+static double perffreq = -1;
+
+double ticks()
+{
+	LARGE_INTEGER li;
+	if (perffreq < 0) {
+		QueryPerformanceFrequency(&li);
+		perffreq = ((double) li.QuadPart) / 1000000.0;
+	}
+	QueryPerformanceCounter(&li);
+	return ((double) li.QuadPart) / perffreq;
 }
