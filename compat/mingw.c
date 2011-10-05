@@ -1006,6 +1006,36 @@ static char *path_lookup(const char *cmd, char **path, int exe_only)
 	return prog;
 }
 
+/*
+ * Create environment block suitable for CreateProcess.
+ */
+static wchar_t *make_environment_block(char **env)
+{
+	wchar_t *wenvblk = NULL;
+	int count = 0;
+	char **e, **tmpenv;
+	int i = 0, size = 0, envblksz = 0, envblkpos = 0;
+
+	for (e = env; *e; e++)
+		count++;
+
+	/* environment must be sorted */
+	tmpenv = xmalloc(sizeof(*tmpenv) * (count + 1));
+	memcpy(tmpenv, env, sizeof(*tmpenv) * (count + 1));
+	qsort(tmpenv, count, sizeof(*tmpenv), compareenv);
+
+	/* create environment block from temporary environment */
+	for (i = 0; tmpenv[i]; i++) {
+		size = 2 * strlen(tmpenv[i]) + 2;
+		ALLOC_GROW(wenvblk, (envblkpos + size) * sizeof(wchar_t), envblksz);
+		envblkpos += xutftowcs(&wenvblk[envblkpos], tmpenv[i], size) + 1;
+	}
+	/* add final \0 terminator */
+	wenvblk[envblkpos] = 0;
+	free(tmpenv);
+	return wenvblk;
+}
+
 struct pinfo_t {
 	struct pinfo_t *next;
 	pid_t pid;
@@ -1082,29 +1112,8 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **env,
 	xutftowcs(wargs, args.buf, 2 * args.len + 1);
 	strbuf_release(&args);
 
-	if (env) {
-		int count = 0;
-		char **e, **sorted_env;
-		int i = 0, size = 0, envblksz = 0, envblkpos = 0;
-
-		for (e = env; *e; e++)
-			count++;
-
-		/* environment must be sorted */
-		sorted_env = xmalloc(sizeof(*sorted_env) * (count + 1));
-		memcpy(sorted_env, env, sizeof(*sorted_env) * (count + 1));
-		qsort(sorted_env, count, sizeof(*sorted_env), compareenv);
-
-		/* create environment block from temporary environment */
-		for (i = 0; sorted_env[i]; i++) {
-			size = 2 * strlen(sorted_env[i]) + 2;
-			ALLOC_GROW(wenvblk, (envblkpos + size) * sizeof(wchar_t), envblksz);
-			envblkpos += xutftowcs(&wenvblk[envblkpos], sorted_env[i], size) + 1;
-		}
-		/* add final \0 terminator */
-		wenvblk[envblkpos] = 0;
-		free(sorted_env);
-	}
+	if (env)
+		wenvblk = make_environment_block(env);
 
 	memset(&pi, 0, sizeof(pi));
 	ret = CreateProcessW(wcmd, wargs, NULL, NULL, TRUE, flags,
