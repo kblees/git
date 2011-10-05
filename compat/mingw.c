@@ -737,6 +737,93 @@ char *mingw_getcwd(char *pointer, int len)
 	return pointer;
 }
 
+static int env_compare(const void *a, const void *b)
+{
+	char *const *ea = a;
+	char *const *eb = b;
+	return strcasecmp(*ea, *eb);
+}
+
+static int lookup_env(char **env, const char *name, size_t nmln)
+{
+	int i;
+	/*
+	 * try case-sensitive match first, this is necessary for sh-i18n--envsubst
+	 * to work with environment variables that differ only in case (e.g. $PATH
+	 * and $path)
+	 */
+	for (i = 0; env[i]; i++) {
+		if (!strncmp(env[i], name, nmln) && '=' == env[i][nmln])
+			/* matches */
+			return i;
+	}
+	/* if there's no case-sensitive match, try case-insensitive instead */
+	for (i = 0; env[i]; i++) {
+		if (!strncasecmp(env[i], name, nmln) && '=' == env[i][nmln])
+			return i;
+	}
+	return -1;
+}
+
+/*
+ * If name contains '=', then sets the variable, otherwise it unsets it
+ */
+static char **env_setenv(char **env, const char *name)
+{
+	char *eq = strchrnul(name, '=');
+	int i = lookup_env(env, name, eq-name);
+
+	if (i < 0) {
+		if (*eq) {
+			for (i = 0; env[i]; i++)
+				;
+			env = xrealloc(env, (i+2)*sizeof(*env));
+			env[i] = (char*) name;
+			env[i+1] = NULL;
+		}
+	}
+	else {
+		free(env[i]);
+		if (*eq)
+			env[i] = (char*) name;
+		else
+			for (; env[i]; i++)
+				env[i] = env[i+1];
+	}
+	return env;
+}
+
+static char *do_getenv(const char *name)
+{
+	size_t len = strlen(name);
+	int i = lookup_env(environ, name, len);
+	if (i >= 0)
+		return environ[i] + len + 1;	/* skip past name and '=' */
+	return NULL;
+}
+
+char *mingw_getenv(const char *name)
+{
+	char *result = do_getenv(name);
+	if (!result && !strcmp(name, "TMPDIR")) {
+		/* on Windows it is TMP and TEMP */
+		result = do_getenv("TMP");
+		if (!result)
+			result = do_getenv("TEMP");
+	}
+	else if (!result && !strcmp(name, "TERM")) {
+		/* simulate TERM to enable auto-color (see color.c) */
+		result = "winansi";
+	}
+	return result;
+}
+
+int mingw_putenv(const char *namevalue)
+{
+	environ = env_setenv(environ, namevalue);
+	return 0;
+}
+
 /*
  * See http://msdn2.microsoft.com/en-us/library/17w5ykft(vs.71).aspx
  * (Parsing C++ Command-Line Arguments)
@@ -917,13 +1004,6 @@ static char *path_lookup(const char *cmd, char **path, int exe_only)
 		prog = lookup_prog(*path++, cmd, isexe, exe_only);
 
 	return prog;
-}
-
-static int env_compare(const void *a, const void *b)
-{
-	char *const *ea = a;
-	char *const *eb = b;
-	return strcasecmp(*ea, *eb);
 }
 
 struct pinfo_t {
@@ -1206,55 +1286,6 @@ void free_environ(char **env)
 	free(env);
 }
 
-static int lookup_env(char **env, const char *name, size_t nmln)
-{
-	int i;
-	/*
-	 * try case-sensitive match first, this is necessary for sh-i18n--envsubst
-	 * to work with environment variables that differ only in case (e.g. $PATH
-	 * and $path)
-	 */
-	for (i = 0; env[i]; i++) {
-		if (!strncmp(env[i], name, nmln) && '=' == env[i][nmln])
-			/* matches */
-			return i;
-	}
-	/* if there's no case-sensitive match, try case-insensitive instead */
-	for (i = 0; env[i]; i++) {
-		if (!strncasecmp(env[i], name, nmln) && '=' == env[i][nmln])
-			return i;
-	}
-	return -1;
-}
-
-/*
- * If name contains '=', then sets the variable, otherwise it unsets it
- */
-static char **env_setenv(char **env, const char *name)
-{
-	char *eq = strchrnul(name, '=');
-	int i = lookup_env(env, name, eq-name);
-
-	if (i < 0) {
-		if (*eq) {
-			for (i = 0; env[i]; i++)
-				;
-			env = xrealloc(env, (i+2)*sizeof(*env));
-			env[i] = (char*) name;
-			env[i+1] = NULL;
-		}
-	}
-	else {
-		free(env[i]);
-		if (*eq)
-			env[i] = (char*) name;
-		else
-			for (; env[i]; i++)
-				env[i] = env[i+1];
-	}
-	return env;
-}
-
 /*
  * Copies global environ and adjusts variables as specified by vars.
  */
@@ -1267,37 +1298,6 @@ char **make_augmented_environ(const char *const *vars)
 		env = env_setenv(env, strchr(v, '=') ? xstrdup(v) : v);
 	}
 	return env;
-}
-
-static char *do_getenv(const char *name)
-{
-	size_t len = strlen(name);
-	int i = lookup_env(environ, name, len);
-	if (i >= 0)
-		return environ[i] + len + 1;	/* skip past name and '=' */
-	return NULL;
-}
-
-char *mingw_getenv(const char *name)
-{
-	char *result = do_getenv(name);
-	if (!result && !strcmp(name, "TMPDIR")) {
-		/* on Windows it is TMP and TEMP */
-		result = do_getenv("TMP");
-		if (!result)
-			result = do_getenv("TEMP");
-	}
-	else if (!result && !strcmp(name, "TERM")) {
-		/* simulate TERM to enable auto-color (see color.c) */
-		result = "winansi";
-	}
-	return result;
-}
-
-int mingw_putenv(const char *namevalue)
-{
-	environ = env_setenv(environ, namevalue);
-	return 0;
 }
 
 /*
