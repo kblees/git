@@ -181,7 +181,7 @@ static int ask_yes_no_if_possible(const char *format, ...)
 	vsnprintf(question, sizeof(question), format, args);
 	va_end(args);
 
-	if ((retry_hook[0] = mingw_getenv("GIT_ASK_YESNO"))) {
+	if ((retry_hook[0] = getenv("GIT_ASK_YESNO"))) {
 		retry_hook[1] = question;
 		return !run_command_v_opt(retry_hook, 0);
 	}
@@ -836,7 +836,7 @@ static const char *parse_interpreter(const char *cmd)
  */
 static char **get_path_split(void)
 {
-	char *p, **path, *envpath = mingw_getenv("PATH");
+	char *p, **path, *envpath = getenv("PATH");
 	int i, n = 0;
 
 	if (!envpath || !*envpath)
@@ -1215,11 +1215,19 @@ void free_environ(char **env)
 static int lookup_env(char **env, const char *name, size_t nmln)
 {
 	int i;
-
+	/*
+	 * try case-sensitive match first, this is necessary for sh-i18n--envsubst
+	 * to work with environment variables that differ only in case (e.g. $PATH
+	 * and $path)
+	 */
 	for (i = 0; env[i]; i++) {
-		if (0 == strncmp(env[i], name, nmln)
-		    && '=' == env[i][nmln])
+		if (!strncmp(env[i], name, nmln) && '=' == env[i][nmln])
 			/* matches */
+			return i;
+	}
+	/* if there's no case-sensitive match, try case-insensitive instead */
+	for (i = 0; env[i]; i++) {
+		if (!strncasecmp(env[i], name, nmln) && '=' == env[i][nmln])
 			return i;
 	}
 	return -1;
@@ -1267,32 +1275,23 @@ char **make_augmented_environ(const char *const *vars)
 	return env;
 }
 
-#undef getenv
-
-/*
- * The system's getenv looks up the name in a case-insensitive manner.
- * This version tries a case-sensitive lookup and falls back to
- * case-insensitive if nothing was found.  This is necessary because,
- * as a prominent example, CMD sets 'Path', but not 'PATH'.
- * Warning: not thread-safe.
- */
-static char *getenv_cs(const char *name)
+static char *do_getenv(const char *name)
 {
 	size_t len = strlen(name);
 	int i = lookup_env(environ, name, len);
 	if (i >= 0)
 		return environ[i] + len + 1;	/* skip past name and '=' */
-	return getenv(name);
+	return NULL;
 }
 
 char *mingw_getenv(const char *name)
 {
-	char *result = getenv_cs(name);
+	char *result = do_getenv(name);
 	if (!result && !strcmp(name, "TMPDIR")) {
 		/* on Windows it is TMP and TEMP */
-		result = getenv_cs("TMP");
+		result = do_getenv("TMP");
 		if (!result)
-			result = getenv_cs("TEMP");
+			result = do_getenv("TEMP");
 	}
 	else if (!result && !strcmp(name, "TERM")) {
 		/* simulate TERM to enable auto-color (see color.c) */
