@@ -737,32 +737,65 @@ char *mingw_getcwd(char *pointer, int len)
 	return pointer;
 }
 
-static int compareenv(const void *a, const void *b)
+/*
+ * Compare environment entries by key (i.e. stopping at '=' or '\0').
+ */
+static int compareenv(const void *v1, const void *v2)
 {
-	char *const *ea = a;
-	char *const *eb = b;
-	return strcasecmp(*ea, *eb);
+	const char *e1 = *(const char**)v1;
+	const char *e2 = *(const char**)v2;
+
+	for (;;) {
+		int c1 = *e1++;
+		int c2 = *e2++;
+		c1 = (c1 == '=') ? 0 : tolower(c1);
+		c2 = (c2 == '=') ? 0 : tolower(c2);
+		if (c1 > c2)
+			return 1;
+		if (c1 < c2)
+			return -1;
+		if (c1 == 0)
+			return 0;
+	}
 }
 
-static int lookupenv(char **env, const char *name, size_t nmln)
+static int bsearchenv(char **env, const char *name, size_t size)
 {
-	int i;
+	unsigned low = 0, high = size - 1, mid, i, j, nmln;
+	int cmp;
+	while (low <= high) {
+		mid = (low + high) >> 1;
+		cmp = compareenv(&env[mid], &name);
+		if	(cmp < 0)
+			low = mid + 1;
+		else if (cmp > 0)
+			high = mid - 1;
+		else
+			goto found;
+	}
+	return ~low; /* not found, return 1's complement of insert position */
+
+found:
+	/* look for duplicate entries before and after the matching entry (mid) */
+	i = j = mid;
+	while (i > low && !compareenv(&env[i - 1], &name))
+		i--;
+	while (j < high && !compareenv(&env[j + 1], &name))
+		j++;
+	if (i == j)
+		return mid; /* no duplicates */
+
 	/*
 	 * try case-sensitive match first, this is necessary for sh-i18n--envsubst
 	 * to work with environment variables that differ only in case (e.g. $PATH
 	 * and $path)
 	 */
-	for (i = 0; env[i]; i++) {
+	nmln = strchrnul(name, '=') - name;
+	for (; i <= j; i++)
 		if (!strncmp(env[i], name, nmln) && '=' == env[i][nmln])
 			/* matches */
 			return i;
-	}
-	/* if there's no case-sensitive match, try case-insensitive instead */
-	for (i = 0; env[i]; i++) {
-		if (!strncasecmp(env[i], name, nmln) && '=' == env[i][nmln])
-			return i;
-	}
-	return -1;
+	return mid;
 }
 
 /*
@@ -772,26 +805,24 @@ static int lookupenv(char **env, const char *name, size_t nmln)
  */
 static int do_putenv(char **env, const char *name, int size, int free_old)
 {
-	char *eq = strchrnul(name, '=');
-	int i = lookupenv(env, name, eq-name);
+	int i = bsearchenv(env, name, size - 1);
 
-	if (i < 0) {
-		if (*eq) {
-			env[size - 1] = (char*) name;
-			env[size] = NULL;
+	/* optionally free removed / replaced entry */
+	if (i >= 0 && free_old)
+		free(env[i]);
+
+	if (strchr(name, '=')) {
+		/* if new value ('key=value') is specified, insert or replace entry */
+		if (i < 0) {
+			i = ~i;
+			memmove(&env[i + 1], &env[i], (size - i) * sizeof(char*));
 			size++;
 		}
-	}
-	else {
-		if (free_old)
-			free(env[i]);
-		if (*eq)
-			env[i] = (char*) name;
-		else {
-			for (; env[i]; i++)
-				env[i] = env[i+1];
-			size--;
-		}
+		env[i] = (char*) name;
+	} else if (i >= 0) {
+		/* otherwise ('key') remove existing entry */
+		size--;
+		memmove(&env[i], &env[i + 1], (size - i) * sizeof(char*));
 	}
 	return size;
 }
@@ -803,11 +834,12 @@ static int environ_alloc = 0;
 
 static char *do_getenv(const char *name)
 {
-	size_t len = strlen(name);
-	int i = lookupenv(environ, name, len);
-	if (i >= 0)
-		return environ[i] + len + 1;	/* skip past name and '=' */
-	return NULL;
+	char *value;
+	int pos = bsearchenv(environ, name, environ_size - 1);
+	if (pos < 0)
+		return NULL;
+	value = strchr(environ[pos], '=');
+	return value ? &value[1] : NULL;
 }
 
 char *mingw_getenv(const char *name)
@@ -1035,9 +1067,6 @@ static wchar_t *make_environment_block(char **deltaenv)
 	/* merge supplied environment changes into the temporary environment */
 	for (i = 0; deltaenv && deltaenv[i]; i++)
 		size = do_putenv(tmpenv, deltaenv[i], size, 0);
-
-	/* environment must be sorted */
-	qsort(tmpenv, size - 1, sizeof(char*), compareenv);
 
 	/* create environment block from temporary environment */
 	for (i = 0; tmpenv[i]; i++) {
@@ -2095,6 +2124,9 @@ void mingw_startup()
 	}
 	environ[i] = NULL;
 	free(buffer);
+
+	/* sort environment for O(log n) getenv / putenv */
+	qsort(environ, i, sizeof(char*), compareenv);
 
 	/* initialize critical section for waitpid pinfo_t list */
 	InitializeCriticalSection(&pinfo_cs);
