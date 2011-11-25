@@ -297,7 +297,7 @@ static void write_console(char *str, size_t len)
 	static wchar_t wbuf[2 * BUFFER_SIZE + 1];
 
 	/* convert utf-8 to utf-16 */
-	int wlen = MultiByteToWideChar(CP_UTF8, 0, str, len, wbuf, 2 * BUFFER_SIZE + 1);
+	int wlen = utftowcsn(wbuf, str, 2 * BUFFER_SIZE + 1, len);
 
 	/* write directly to console */
 	WriteConsoleW(console, wbuf, wlen, NULL, NULL);
