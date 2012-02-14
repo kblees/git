@@ -75,6 +75,9 @@ static void preload_index(struct index_state *index, const char **pathspec)
 	if (!core_preload_index)
 		return;
 
+#ifdef USE_WINFSCACHE
+	fscache_enable(1);
+#endif
 	threads = index->cache_nr / THREAD_COST;
 	if (threads < 2)
 		return;
@@ -97,6 +100,9 @@ static void preload_index(struct index_state *index, const char **pathspec)
 		if (pthread_join(p->pthread, NULL))
 			die("unable to join threaded lstat");
 	}
+#ifdef USE_WINFSCACHE
+	fscache_enable(0);
+#endif
 }
 #endif
 
