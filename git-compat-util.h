@@ -120,7 +120,9 @@
 #endif
 #if defined(__MINGW32__)
 /* pull in Windows compatibility stuff */
+#define USE_WINFSCACHE 1
 #include "compat/mingw.h"
+#include "compat/winfscache.h"
 #elif defined(_MSC_VER)
 #include "compat/msvc.h"
 #else
