@@ -460,3 +460,10 @@ extern const char *get_windows_home_directory();
 #define get_home_directory() get_windows_home_directory()
 
 extern double ticks();
+
+#define GIT_TRACE_PERFORMANCE "GIT_TRACE_PERFORMANCE"
+
+extern void trace_performance_file_line(const char *file, int lineno, double t,
+	const char *fmt, ...);
+#define trace_performance(time, ...) \
+	trace_performance_file_line(__FILE__, __LINE__, time, __VA_ARGS__)
