@@ -324,7 +324,7 @@ int cmd_rm(int argc, const char **argv, const char *prefix)
 		if (!match_pathspec(pathspec, ce->name, ce_namelen(ce), 0, seen))
 			continue;
 		ALLOC_GROW(list.entry, list.nr + 1, list.alloc);
-		list.entry[list.nr].name = ce->name;
+		list.entry[list.nr].name = xstrdup(ce->name);
 		list.entry[list.nr++].is_submodule = S_ISGITLINK(ce->ce_mode);
 	}
 
