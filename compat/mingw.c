@@ -593,10 +593,19 @@ static int do_stat_internal(int follow, const char *file_name, struct stat *buf)
 
 int (*lstat)(const char *file_name, struct stat *buf) = mingw_lstat;
 
+static double lstat_time = 0;
+static int lstat_cnt = 0;
+
 int mingw_lstat(const char *file_name, struct stat *buf)
 {
-	return do_stat_internal(0, file_name, buf);
+	int result;
+	lstat_time -= ticks();
+	result = do_stat_internal(0, file_name, buf);
+	lstat_time += ticks();
+	lstat_cnt++;
+	return result;
 }
+
 int mingw_stat(const char *file_name, struct stat *buf)
 {
 	return do_stat_internal(1, file_name, buf);
@@ -2138,6 +2147,7 @@ static double start_time;
 
 static void trace_total_performance(void)
 {
+	trace_performance(lstat_time, "mingw_lstat (called %i times)", lstat_cnt);
 	trace_performance_since(start_time, "command: %s", GetCommandLineA());
 }
 

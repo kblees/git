@@ -115,6 +115,24 @@ static int fstat_output(int fd, const struct checkout *state, struct stat *st)
 	return 0;
 }
 
+static int trace_initialized;
+static double create_time;
+static double stream_time;
+static double read_time;
+static double convert_time;
+static double write_time;
+static double close_time;
+
+static void trace_write_entry(void)
+{
+	trace_performance(create_time, "write_entry::create");
+	trace_performance(stream_time, "write_entry::stream");
+	trace_performance(read_time, "write_entry::read");
+	trace_performance(convert_time, "write_entry::convert");
+	trace_performance(write_time, "write_entry::write");
+	trace_performance(close_time, "write_entry::close");
+}
+
 static int streaming_write_entry(const struct cache_entry *ce, char *path,
 				 struct stream_filter *filter,
 				 const struct checkout *state, int to_tempfile,
@@ -123,13 +141,19 @@ static int streaming_write_entry(const struct cache_entry *ce, char *path,
 	int result = 0;
 	int fd;
 
+	create_time -= ticks();
 	fd = open_output_fd(path, ce, to_tempfile);
+	create_time += ticks();
 	if (fd < 0)
 		return -1;
 
+	stream_time -= ticks();
 	result |= stream_blob_to_fd(fd, ce->sha1, filter, 1);
+	stream_time += ticks();
 	*fstat_done = fstat_output(fd, state, statbuf);
+	close_time -= ticks();
 	result |= close(fd);
+	close_time += ticks();
 
 	if (result)
 		unlink(path);
@@ -147,6 +171,11 @@ static int write_entry(struct cache_entry *ce,
 	size_t wrote, newsize = 0;
 	struct stat st;
 
+	if (!trace_initialized) {
+		atexit(trace_write_entry);
+		trace_initialized = 1;
+	}
+
 	if (ce_mode_s_ifmt == S_IFREG) {
 		struct stream_filter *filter = get_stream_filter(ce->name, ce->sha1);
 		if (filter &&
@@ -159,7 +188,9 @@ static int write_entry(struct cache_entry *ce,
 	switch (ce_mode_s_ifmt) {
 	case S_IFREG:
 	case S_IFLNK:
+		read_time -= ticks();
 		new = read_blob_entry(ce, &size);
+		read_time += ticks();
 		if (!new)
 			return error("unable to read sha1 file of %s (%s)",
 				path, sha1_to_hex(ce->sha1));
@@ -176,24 +207,31 @@ static int write_entry(struct cache_entry *ce,
 		/*
 		 * Convert from git internal format to working tree format
 		 */
+		convert_time -= ticks();
 		if (ce_mode_s_ifmt == S_IFREG &&
 		    convert_to_working_tree(ce->name, new, size, &buf)) {
 			free(new);
 			new = strbuf_detach(&buf, &newsize);
 			size = newsize;
 		}
-
+		convert_time += ticks();
+		create_time -= ticks();
 		fd = open_output_fd(path, ce, to_tempfile);
+		create_time += ticks();
 		if (fd < 0) {
 			free(new);
 			return error("unable to create file %s (%s)",
 				path, strerror(errno));
 		}
 
+		write_time -= ticks();
 		wrote = write_in_full(fd, new, size);
+		write_time += ticks();
 		if (!to_tempfile)
 			fstat_done = fstat_output(fd, state, &st);
+		close_time -= ticks();
 		close(fd);
+		close_time += ticks();
 		free(new);
 		if (wrote != size)
 			return error("unable to write file %s", path);
