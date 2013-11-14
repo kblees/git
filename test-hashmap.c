@@ -205,6 +205,117 @@ static void perf_hash(unsigned int method, unsigned int rounds)
 	}
 }
 
+#include "khash.h"
+
+static khint_t khash_hash(struct test_entry *e)
+{
+	return e->ent.hash;
+}
+
+static int khash_eq(struct test_entry *e1, struct test_entry *e2)
+{
+	return strcmp(e1->key, e2->key) == 0;
+}
+
+KHASH_INIT(perf, struct test_entry *, char *, 1, khash_hash, khash_eq)
+
+/*
+ * Test performance of khash.h generic maps
+ * Usage: time echo "perfkhash method rounds" | test-hashmap
+ */
+static void perf_khash(unsigned int method, unsigned int rounds)
+{
+	khash_t(perf) *map;
+	char buf[16];
+	struct test_entry **entries;
+	unsigned int i, j;
+	int dummy;
+
+	entries = malloc(TEST_SIZE * sizeof(struct test_entry *));
+	for (i = 0; i < TEST_SIZE; i++) {
+		snprintf(buf, sizeof(buf), "%i", i);
+		entries[i] = alloc_test_entry(0, buf, strlen(buf), "", 0);
+		entries[i]->ent.hash = hash(method, i, buf);
+	}
+
+	if (method & TEST_ADD) {
+		/* test adding to the map */
+		for (j = 0; j < rounds; j++) {
+			map = kh_init(perf);
+
+			/* add entries */
+			for (i = 0; i < TEST_SIZE; i++)
+				kh_put(perf, map, entries[i], &dummy);
+
+			kh_destroy(perf, map);
+		}
+	} else {
+		/* test map lookups */
+		map = kh_init(perf);
+
+		/* fill the map (sparsely if specified) */
+		j = (method & TEST_SPARSE) ? TEST_SIZE / 10 : TEST_SIZE;
+		for (i = 0; i < j; i++)
+			kh_put(perf, map, entries[i], &dummy);
+
+		for (j = 0; j < rounds; j++) {
+			for (i = 0; i < TEST_SIZE; i++)
+				kh_get(perf, map, entries[i]);
+		}
+
+		kh_destroy(perf, map);
+	}
+}
+
+KHASH_MAP_INIT_STR(perfstr, char *)
+
+/*
+ * Test performance of khash.h string maps
+ * Usage: time echo "perfkhstr method rounds" | test-hashmap
+ */
+static void perf_khstr(unsigned int method, unsigned int rounds)
+{
+	khash_t(perfstr) *map;
+	char buf[16];
+	char **entries;
+	unsigned int i, j;
+	int dummy;
+
+	entries = malloc(TEST_SIZE * sizeof(char *));
+	for (i = 0; i < TEST_SIZE; i++) {
+		snprintf(buf, sizeof(buf), "%i", i);
+		entries[i] = strdup(buf);
+	}
+
+	if (method & TEST_ADD) {
+		/* test adding to the map */
+		for (j = 0; j < rounds; j++) {
+			map = kh_init(perfstr);
+
+			/* add entries */
+			for (i = 0; i < TEST_SIZE; i++)
+				kh_put(perfstr, map, entries[i], &dummy);
+
+			kh_destroy(perfstr, map);
+		}
+	} else {
+		/* test map lookups */
+		map = kh_init(perfstr);
+
+		/* fill the map (sparsely if specified) */
+		j = (method & TEST_SPARSE) ? TEST_SIZE / 10 : TEST_SIZE;
+		for (i = 0; i < j; i++)
+			kh_put(perfstr, map, entries[i], &dummy);
+
+		for (j = 0; j < rounds; j++) {
+			for (i = 0; i < TEST_SIZE; i++)
+				kh_get(perfstr, map, entries[i]);
+		}
+
+		kh_destroy(perfstr, map);
+	}
+}
+
 #define DELIM " \t\r\n"
 
 /*
@@ -219,6 +330,8 @@ static void perf_hash(unsigned int method, unsigned int rounds)
  *
  * perfhashmap method rounds -> test hashmap.[ch] performance
  * perfhash method rounds -> test hash.[ch] performance
+ * perfkhash method rounds -> test khash.h generic map performance
+ * perfkhstr method rounds -> test khash.h string map performance
  */
 int main(int argc, char *argv[])
 {
@@ -327,6 +440,14 @@ int main(int argc, char *argv[])
 		} else if (!strcmp("perfhash", cmd) && l1 && l2) {
 
 			perf_hash(atoi(p1), atoi(p2));
+
+		} else if (!strcmp("perfkhash", cmd) && l1 && l2) {
+
+			perf_khash(atoi(p1), atoi(p2));
+
+		} else if (!strcmp("perfkhstr", cmd) && l1 && l2) {
+
+			perf_khstr(atoi(p1), atoi(p2));
 
 		} else {
 
