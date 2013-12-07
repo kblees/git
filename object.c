@@ -54,12 +54,7 @@ static unsigned int hash_obj(const unsigned char *sha1, unsigned int n)
 static void insert_obj_hash(struct object *obj, struct object **hash, unsigned int size)
 {
 	unsigned int j = hash_obj(obj->sha1, size);
-
-	while (hash[j]) {
-		j++;
-		if (j >= size)
-			j = 0;
-	}
+	obj->next = hash[j];
 	hash[j] = obj;
 }
 
@@ -72,37 +67,38 @@ static inline int fast_hashcmp(const unsigned char *sha1, const unsigned char *s
 
 struct object *lookup_object(const unsigned char *sha1)
 {
-	unsigned int i, first;
-	struct object *obj;
+	unsigned int i;
+	struct object **obj;
 
 	if (!obj_hash)
 		return NULL;
 
-	first = i = hash_obj(sha1, obj_hash_size);
-	while ((obj = obj_hash[i]) != NULL) {
+	i = hash_obj(sha1, obj_hash_size);
+	for (obj = &obj_hash[i]; *obj; obj = &(*obj)->next) {
 #if 1
-		if (!fast_hashcmp(sha1, obj->sha1))
+		if (fast_hashcmp(sha1, (*obj)->sha1))
 #else
-		if (!hashcmp(sha1, obj->sha1))
+		if (hashcmp(sha1, (*obj)->sha1))
 #endif
-			break;
-		i++;
-		if (i == obj_hash_size)
-			i = 0;
-	}
+			continue;
+
 #if 1
-	if (obj && i != first) {
-		/*
-		 * Move object to where we started to look for it so
-		 * that we do not need to walk the hash table the next
-		 * time we look for it.
-		 */
-		struct object *tmp = obj_hash[i];
-		obj_hash[i] = obj_hash[first];
-		obj_hash[first] = tmp;
-	}
+		if (obj != &obj_hash[i]) {
+			/*
+			 * Move object to the front so that we do not need
+			 * to walk the chain next time we look for it.
+			 */
+			struct object *tmp = *obj;
+			*obj = tmp->next;
+			tmp->next = obj_hash[i];
+			obj_hash[i] = tmp;
+		}
+		return obj_hash[i];
+#else
+		return *obj;
 #endif
-	return obj;
+	}
+	return NULL;
 }
 
 static void grow_object_hash(void)
@@ -113,14 +109,12 @@ static void grow_object_hash(void)
 	 * above.
 	 */
 	int new_hash_size = obj_hash_size < 32 ? 32 : 2 * obj_hash_size;
-	struct object **new_hash;
+	struct object **new_hash, *obj;
 
 	new_hash = xcalloc(new_hash_size, sizeof(struct object *));
 	for (i = 0; i < obj_hash_size; i++) {
-		struct object *obj = obj_hash[i];
-		if (!obj)
-			continue;
-		insert_obj_hash(obj, new_hash, new_hash_size);
+		for (obj = obj_hash[i]; obj; obj = obj->next)
+			insert_obj_hash(obj, new_hash, new_hash_size);
 	}
 	free(obj_hash);
 	obj_hash = new_hash;
@@ -137,7 +131,7 @@ void *create_object(const unsigned char *sha1, int type, void *o)
 	obj->flags = 0;
 	hashcpy(obj->sha1, sha1);
 
-	if (obj_hash_size - 1 <= nr_objs * 2)
+	if (obj_hash_size * 4 <= nr_objs * 5)
 		grow_object_hash();
 
 	insert_obj_hash(obj, obj_hash, obj_hash_size);

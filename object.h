@@ -32,6 +32,7 @@ struct object_array {
  * The object type is stored in 3 bits.
  */
 struct object {
+	struct object *next;
 	unsigned parsed : 1;
 	unsigned used : 1;
 	unsigned type : TYPE_BITS;
