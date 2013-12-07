@@ -63,6 +63,13 @@ static void insert_obj_hash(struct object *obj, struct object **hash, unsigned i
 	hash[j] = obj;
 }
 
+static inline int fast_hashcmp(const unsigned char *sha1, const unsigned char *sha2)
+{
+	uint32_t *i1 = (uint32_t*) sha1;
+	uint32_t *i2 = (uint32_t*) sha2;
+	return i1[0] != i2[0] || i1[1] != i2[1] || i1[2] != i2[2] || i1[3] != i2[3] || i1[4] != i2[4];
+}
+
 struct object *lookup_object(const unsigned char *sha1)
 {
 	unsigned int i, first;
@@ -73,12 +80,17 @@ struct object *lookup_object(const unsigned char *sha1)
 
 	first = i = hash_obj(sha1, obj_hash_size);
 	while ((obj = obj_hash[i]) != NULL) {
+#if 1
+		if (!fast_hashcmp(sha1, obj->sha1))
+#else
 		if (!hashcmp(sha1, obj->sha1))
+#endif
 			break;
 		i++;
 		if (i == obj_hash_size)
 			i = 0;
 	}
+#if 1
 	if (obj && i != first) {
 		/*
 		 * Move object to where we started to look for it so
@@ -89,6 +101,7 @@ struct object *lookup_object(const unsigned char *sha1)
 		obj_hash[i] = obj_hash[first];
 		obj_hash[first] = tmp;
 	}
+#endif
 	return obj;
 }
 
