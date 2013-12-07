@@ -5,17 +5,16 @@
 #include "commit.h"
 #include "tag.h"
 
-static struct object **obj_hash;
-static int nr_objs, obj_hash_size;
+static struct hashmap obj_map;
 
 unsigned int get_max_object_index(void)
 {
-	return obj_hash_size;
+	return obj_map.tablesize;
 }
 
 struct object *get_indexed_object(unsigned int idx)
 {
-	return obj_hash[idx];
+	return (struct object *) obj_map.table[idx];
 }
 
 static const char *object_type_strings[] = {
@@ -43,75 +42,34 @@ int type_from_string(const char *str)
 	die("invalid object type \"%s\"", str);
 }
 
-static unsigned int hash_obj(const unsigned char *sha1, unsigned int n)
-{
-	unsigned int hash;
-	memcpy(&hash, sha1, sizeof(unsigned int));
-	/* Assumes power-of-2 hash sizes in grow_object_hash */
-	return hash & (n - 1);
-}
-
-static void insert_obj_hash(struct object *obj, struct object **hash, unsigned int size)
-{
-	unsigned int j = hash_obj(obj->sha1, size);
-
-	while (hash[j]) {
-		j++;
-		if (j >= size)
-			j = 0;
-	}
-	hash[j] = obj;
-}
-
 struct object *lookup_object(const unsigned char *sha1)
 {
-	unsigned int i, first;
-	struct object *obj;
+	struct object key, *obj;
 
-	if (!obj_hash)
+	if (!obj_map.table)
 		return NULL;
 
-	first = i = hash_obj(sha1, obj_hash_size);
-	while ((obj = obj_hash[i]) != NULL) {
-		if (!hashcmp(sha1, obj->sha1))
-			break;
-		i++;
-		if (i == obj_hash_size)
-			i = 0;
-	}
-	if (obj && i != first) {
-		/*
-		 * Move object to where we started to look for it so
-		 * that we do not need to walk the hash table the next
-		 * time we look for it.
-		 */
-		struct object *tmp = obj_hash[i];
-		obj_hash[i] = obj_hash[first];
-		obj_hash[first] = tmp;
-	}
+	hashmap_entry_init(&key, *(uint32_t *) sha1);
+#if 1
+	return hashmap_get(&obj_map, &key, sha1);
+#else
+	/* move-to-front version */
+	obj = hashmap_remove(&obj_map, &key, sha1);
+	if (obj)
+		hashmap_add(&obj_map, obj);
 	return obj;
+#endif
 }
 
-static void grow_object_hash(void)
+static int object_cmp(const struct object *obj1, const struct object *obj2, const unsigned char *sha1)
 {
-	int i;
-	/*
-	 * Note that this size must always be power-of-2 to match hash_obj
-	 * above.
-	 */
-	int new_hash_size = obj_hash_size < 32 ? 32 : 2 * obj_hash_size;
-	struct object **new_hash;
-
-	new_hash = xcalloc(new_hash_size, sizeof(struct object *));
-	for (i = 0; i < obj_hash_size; i++) {
-		struct object *obj = obj_hash[i];
-		if (!obj)
-			continue;
-		insert_obj_hash(obj, new_hash, new_hash_size);
-	}
-	free(obj_hash);
-	obj_hash = new_hash;
-	obj_hash_size = new_hash_size;
+#if 1
+	uint32_t *i1 = (uint32_t *) obj1->sha1;
+	uint32_t *i2 = (uint32_t *) (sha1 ? sha1 : obj2->sha1);
+	return i1[1] != i2[1] || i1[2] != i2[2] || i1[3] != i2[3] || i1[4] != i2[4];
+#else
+	return hashcmp(obj1->sha1, sha1 ? sha1 : obj2->sha1);
+#endif
 }
 
 void *create_object(const unsigned char *sha1, int type, void *o)
@@ -124,11 +82,11 @@ void *create_object(const unsigned char *sha1, int type, void *o)
 	obj->flags = 0;
 	hashcpy(obj->sha1, sha1);
 
-	if (obj_hash_size - 1 <= nr_objs * 2)
-		grow_object_hash();
+	if (!obj_map.table)
+		hashmap_init(&obj_map, (hashmap_cmp_fn) object_cmp, 0);
 
-	insert_obj_hash(obj, obj_hash, obj_hash_size);
-	nr_objs++;
+	hashmap_entry_init(obj, *(uint32_t *) sha1);
+	hashmap_add(&obj_map, obj);
 	return obj;
 }
 
@@ -369,11 +327,11 @@ void object_array_remove_duplicates(struct object_array *array)
 
 void clear_object_flags(unsigned flags)
 {
-	int i;
-
-	for (i=0; i < obj_hash_size; i++) {
-		struct object *obj = obj_hash[i];
-		if (obj)
-			obj->flags &= ~flags;
-	}
+	struct object *obj;
+	struct hashmap_iter it;
+	if (!obj_map.table)
+		return;
+	for (obj = hashmap_iter_first(&obj_map, &it); obj;
+	     obj = hashmap_iter_next(&it))
+		obj->flags &= ~flags;
 }
