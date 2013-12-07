@@ -4,18 +4,22 @@
 #include "tree.h"
 #include "commit.h"
 #include "tag.h"
+#include "khash.h"
 
-static struct object **obj_hash;
-static int nr_objs, obj_hash_size;
+static khash_sha1 *obj_hash;
 
 unsigned int get_max_object_index(void)
 {
-	return obj_hash_size;
+	if (!obj_hash)
+		return 0;
+	return kh_end(obj_hash);
 }
 
 struct object *get_indexed_object(unsigned int idx)
 {
-	return obj_hash[idx];
+	if (kh_exist(obj_hash, idx))
+		return kh_value(obj_hash, idx);
+	return NULL;
 }
 
 static const char *object_type_strings[] = {
@@ -43,80 +47,23 @@ int type_from_string(const char *str)
 	die("invalid object type \"%s\"", str);
 }
 
-static unsigned int hash_obj(const unsigned char *sha1, unsigned int n)
-{
-	unsigned int hash;
-	memcpy(&hash, sha1, sizeof(unsigned int));
-	/* Assumes power-of-2 hash sizes in grow_object_hash */
-	return hash & (n - 1);
-}
-
-static void insert_obj_hash(struct object *obj, struct object **hash, unsigned int size)
-{
-	unsigned int j = hash_obj(obj->sha1, size);
-
-	while (hash[j]) {
-		j++;
-		if (j >= size)
-			j = 0;
-	}
-	hash[j] = obj;
-}
-
 struct object *lookup_object(const unsigned char *sha1)
 {
-	unsigned int i, first;
-	struct object *obj;
+	khint_t pos;
 
 	if (!obj_hash)
 		return NULL;
 
-	first = i = hash_obj(sha1, obj_hash_size);
-	while ((obj = obj_hash[i]) != NULL) {
-		if (!hashcmp(sha1, obj->sha1))
-			break;
-		i++;
-		if (i == obj_hash_size)
-			i = 0;
-	}
-	if (obj && i != first) {
-		/*
-		 * Move object to where we started to look for it so
-		 * that we do not need to walk the hash table the next
-		 * time we look for it.
-		 */
-		struct object *tmp = obj_hash[i];
-		obj_hash[i] = obj_hash[first];
-		obj_hash[first] = tmp;
-	}
-	return obj;
-}
-
-static void grow_object_hash(void)
-{
-	int i;
-	/*
-	 * Note that this size must always be power-of-2 to match hash_obj
-	 * above.
-	 */
-	int new_hash_size = obj_hash_size < 32 ? 32 : 2 * obj_hash_size;
-	struct object **new_hash;
-
-	new_hash = xcalloc(new_hash_size, sizeof(struct object *));
-	for (i = 0; i < obj_hash_size; i++) {
-		struct object *obj = obj_hash[i];
-		if (!obj)
-			continue;
-		insert_obj_hash(obj, new_hash, new_hash_size);
-	}
-	free(obj_hash);
-	obj_hash = new_hash;
-	obj_hash_size = new_hash_size;
+	pos = kh_get_sha1(obj_hash, sha1);
+	if (pos < kh_end(obj_hash))
+		return kh_value(obj_hash, pos);
+	return NULL;
 }
 
 void *create_object(const unsigned char *sha1, int type, void *o)
 {
 	struct object *obj = o;
+	khint_t pos, dummy;
 
 	obj->parsed = 0;
 	obj->used = 0;
@@ -124,11 +71,15 @@ void *create_object(const unsigned char *sha1, int type, void *o)
 	obj->flags = 0;
 	hashcpy(obj->sha1, sha1);
 
-	if (obj_hash_size - 1 <= nr_objs * 2)
-		grow_object_hash();
+	if (!obj_hash)
+		obj_hash = kh_init_sha1();
 
-	insert_obj_hash(obj, obj_hash, obj_hash_size);
-	nr_objs++;
+	/*
+	 * Note: "kh_value(obj_hash, kh_put_sha1(...)) = obj" segfaults,
+	 * must be two distinct lines!
+	 */
+	pos = kh_put_sha1(obj_hash, obj->sha1, &dummy);
+	kh_value(obj_hash, pos) = obj;
 	return obj;
 }
 
@@ -369,11 +320,10 @@ void object_array_remove_duplicates(struct object_array *array)
 
 void clear_object_flags(unsigned flags)
 {
-	int i;
+	struct object *obj;
 
-	for (i=0; i < obj_hash_size; i++) {
-		struct object *obj = obj_hash[i];
-		if (obj)
-			obj->flags &= ~flags;
-	}
+	if (!obj_hash)
+		return;
+
+	kh_foreach_value(obj_hash, obj, obj->flags &= ~flags);
 }
