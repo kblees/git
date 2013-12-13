@@ -243,7 +243,7 @@ static int score_compare(const void *a_, const void *b_)
 }
 
 struct file_similarity {
-	struct hashmap_entry entry;
+	HASHMAP_ENTRY_HEADER
 	int index;
 	struct diff_filespec *filespec;
 };

@@ -15,9 +15,11 @@ extern unsigned int memihash(const void *buf, size_t len);
 
 /* data structures */
 
+#define HASHMAP_ENTRY_HEADER struct hashmap_entry *__next; \
+	unsigned int __hash;
+
 struct hashmap_entry {
-	struct hashmap_entry *next;
-	unsigned int hash;
+	HASHMAP_ENTRY_HEADER
 };
 
 typedef int (*hashmap_cmp_fn)(const void *entry, const void *entry_or_key,
@@ -46,8 +48,8 @@ extern void hashmap_free(struct hashmap *map, int free_entries);
 static inline void hashmap_entry_init(void *entry, int hash)
 {
 	struct hashmap_entry *e = entry;
-	e->hash = hash;
-	e->next = NULL;
+	e->__hash = hash;
+	e->__next = NULL;
 }
 extern void *hashmap_get(const struct hashmap *map, const void *key,
 		const void *keydata);

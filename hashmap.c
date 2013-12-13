@@ -78,13 +78,13 @@ static inline int entry_equals(const struct hashmap *map,
 		const struct hashmap_entry *e1, const struct hashmap_entry *e2,
 		const void *keydata)
 {
-	return (e1 == e2) || (e1->hash == e2->hash && !map->cmpfn(e1, e2, keydata));
+	return (e1 == e2) || (e1->__hash == e2->__hash && !map->cmpfn(e1, e2, keydata));
 }
 
 static inline unsigned int bucket(const struct hashmap *map,
 		const struct hashmap_entry *key)
 {
-	return key->hash & (map->tablesize - 1);
+	return key->__hash & (map->tablesize - 1);
 }
 
 static void rehash(struct hashmap *map, unsigned int newsize)
@@ -96,9 +96,9 @@ static void rehash(struct hashmap *map, unsigned int newsize)
 	for (i = 0; i < oldsize; i++) {
 		struct hashmap_entry *e = oldtable[i];
 		while (e) {
-			struct hashmap_entry *next = e->next;
+			struct hashmap_entry *next = e->__next;
 			unsigned int b = bucket(map, e);
-			e->next = map->table[b];
+			e->__next = map->table[b];
 			map->table[b] = e;
 			e = next;
 		}
@@ -111,7 +111,7 @@ static inline struct hashmap_entry **find_entry_ptr(const struct hashmap *map,
 {
 	struct hashmap_entry **e = &map->table[bucket(map, key)];
 	while (*e && !entry_equals(map, *e, key, keydata))
-		e = &(*e)->next;
+		e = &(*e)->__next;
 	return e;
 }
 
@@ -157,8 +157,8 @@ void *hashmap_get(const struct hashmap *map, const void *key, const void *keydat
 
 void *hashmap_get_next(const struct hashmap *map, const void *entry)
 {
-	struct hashmap_entry *e = ((struct hashmap_entry *) entry)->next;
-	for (; e; e = e->next)
+	struct hashmap_entry *e = ((struct hashmap_entry *) entry)->__next;
+	for (; e; e = e->__next)
 		if (entry_equals(map, entry, e, NULL))
 			return e;
 	return NULL;
@@ -169,7 +169,7 @@ void hashmap_add(struct hashmap *map, void *entry)
 	unsigned int b = bucket(map, entry);
 
 	/* add entry */
-	((struct hashmap_entry *) entry)->next = map->table[b];
+	((struct hashmap_entry *) entry)->__next = map->table[b];
 	map->table[b] = entry;
 
 	/* fix size and rehash if appropriate */
@@ -187,8 +187,8 @@ void *hashmap_remove(struct hashmap *map, const void *key, const void *keydata)
 
 	/* remove existing entry */
 	old = *e;
-	*e = old->next;
-	old->next = NULL;
+	*e = old->__next;
+	old->__next = NULL;
 
 	/* fix size and rehash if appropriate */
 	map->size--;
@@ -216,7 +216,7 @@ void *hashmap_iter_next(struct hashmap_iter *iter)
 	struct hashmap_entry *current = iter->next;
 	for (;;) {
 		if (current) {
-			iter->next = current->next;
+			iter->next = current->__next;
 			return current;
 		}
 

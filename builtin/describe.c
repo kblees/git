@@ -37,7 +37,7 @@ static const char *diff_index_args[] = {
 };
 
 struct commit_name {
-	struct hashmap_entry entry;
+	HASHMAP_ENTRY_HEADER
 	unsigned char peeled[20];
 	struct tag *tag;
 	unsigned prio:2; /* annotated tag = 2, tag = 1, head = 0 */

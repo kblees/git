@@ -9,7 +9,7 @@
 #include "cache.h"
 
 struct dir_entry {
-	struct hashmap_entry ent;
+	HASHMAP_ENTRY_HEADER
 	struct dir_entry *parent;
 	struct cache_entry *ce;
 	int nr;
@@ -212,8 +212,7 @@ struct cache_entry *index_dir_exists(struct index_state *istate, const char *nam
 
 struct cache_entry *index_file_exists(struct index_state *istate, const char *name, int namelen, int icase)
 {
-	struct cache_entry *ce;
-	struct hashmap_entry key;
+	struct cache_entry key, *ce;
 
 	lazy_init_name_hash(istate);
 

@@ -3,7 +3,7 @@
 
 struct test_entry
 {
-	struct hashmap_entry ent;
+	HASHMAP_ENTRY_HEADER
 	/* key and value as two \0-terminated strings */
 	char key[FLEX_ARRAY];
 };
@@ -77,7 +77,7 @@ static void perf_hashmap(unsigned int method, unsigned int rounds)
 {
 	struct hashmap map;
 	char buf[16];
-	struct test_entry **entries;
+	struct test_entry key, **entries;
 	unsigned int *hashes;
 	unsigned int i, j;
 
@@ -115,7 +115,6 @@ static void perf_hashmap(unsigned int method, unsigned int rounds)
 
 		for (j = 0; j < rounds; j++) {
 			for (i = 0; i < TEST_SIZE; i++) {
-				struct hashmap_entry key;
 				hashmap_entry_init(&key, hashes[i]);
 				hashmap_get(&map, &key, entries[i]->key);
 			}
@@ -154,7 +153,7 @@ int main(int argc, char *argv[])
 	while (fgets(line, sizeof(line), stdin)) {
 		char *cmd, *p1 = NULL, *p2 = NULL;
 		int l1 = 0, l2 = 0, hash = 0;
-		struct test_entry *entry;
+		struct test_entry key, *entry;
 
 		/* break line into command and up to two parameters */
 		cmd = strtok(line, DELIM);
@@ -200,7 +199,6 @@ int main(int argc, char *argv[])
 		} else if (!strcmp("get", cmd) && l1) {
 
 			/* setup static key */
-			struct hashmap_entry key;
 			hashmap_entry_init(&key, hash);
 
 			/* lookup entry in hashmap */
@@ -217,7 +215,6 @@ int main(int argc, char *argv[])
 		} else if (!strcmp("remove", cmd) && l1) {
 
 			/* setup static key */
-			struct hashmap_entry key;
 			hashmap_entry_init(&key, hash);
 
 			/* remove entry from hashmap */

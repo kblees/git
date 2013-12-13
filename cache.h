@@ -130,7 +130,7 @@ struct stat_data {
 };
 
 struct cache_entry {
-	struct hashmap_entry ent;
+	HASHMAP_ENTRY_HEADER
 	struct stat_data ce_stat_data;
 	unsigned int ce_mode;
 	unsigned int ce_flags;
