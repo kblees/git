@@ -237,4 +237,10 @@ test_expect_success 'grow / shrink' '
 
 '
 
+test_expect_success '"#pragma pack()" resets packing to default' '
+
+	test_hashmap "pragma-pack" "ok"
+
+'
+
 test_done

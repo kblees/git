@@ -36,6 +36,12 @@ static struct test_entry *alloc_test_entry(int hash, char *key, int klen,
 	return entry;
 }
 
+struct pointer_int
+{
+	void *ptr;
+	int i;
+};
+
 #define HASH_METHOD_FNV 0
 #define HASH_METHOD_I 1
 #define HASH_METHOD_IDIV10 2
@@ -136,6 +142,7 @@ static void perf_hashmap(unsigned int method, unsigned int rounds)
  * remove key -> NULL / old value
  * iterate -> key1 value1\nkey2 value2\n...
  * size -> tablesize numentries
+ * pragma-pack -> ok / failure
  *
  * perfhashmap method rounds -> test hashmap.[ch] performance
  */
@@ -238,6 +245,16 @@ int main(int argc, char *argv[])
 
 			/* print table sizes */
 			printf("%u %u\n", map.tablesize, map.size);
+
+		} else if (!strcmp("pragma-pack", cmd)) {
+
+			if ((sizeof(struct pointer_int) % sizeof(void *)) == 0)
+				printf("ok\n");
+			else
+				printf("sizeof(pointer+int) (%u) is not a "
+				       "multiple of sizeof(pointer) (%u)!\n",
+				       (unsigned) sizeof(struct pointer_int),
+				       (unsigned) sizeof(void *));
 
 		} else if (!strcmp("perfhashmap", cmd) && l1 && l2) {
 

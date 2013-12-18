@@ -15,10 +15,17 @@ extern unsigned int memihash(const void *buf, size_t len);
 
 /* data structures */
 
+/*
+ * Set struct packing to 4 so that we don't waste memory on 64-bit systems.
+ * Struct hashmap_entry is used as prefix to other (un-packed) structures,
+ * so this won't cause alignment issues e.g. for odd elements in an array.
+ */
+#pragma pack(4)
 struct hashmap_entry {
 	struct hashmap_entry *next;
 	unsigned int hash;
 };
+#pragma pack()
 
 typedef int (*hashmap_cmp_fn)(const void *entry, const void *entry_or_key,
 		const void *keydata);
