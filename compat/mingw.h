@@ -233,6 +233,11 @@ char *mingw_getenv(const char *name);
 int mingw_putenv(const char *namevalue);
 #define putenv mingw_putenv
 #define unsetenv mingw_putenv
+extern char **mingw_environ;
+#ifdef environ
+#undef environ
+#endif
+#define environ mingw_environ
 
 int mingw_gethostname(char *host, int namelen);
 #define gethostname mingw_gethostname

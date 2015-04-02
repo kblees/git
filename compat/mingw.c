@@ -968,6 +968,8 @@ static int do_putenv(char **env, const char *name, int size, int free_old);
 static int environ_size = 0;
 /* allocated size of environ array, in bytes */
 static int environ_alloc = 0;
+/* our UTF-8 encoded, sorted version of the environment */
+char **mingw_environ;
 
 /*
  * Create environment block suitable for CreateProcess. Merges current
