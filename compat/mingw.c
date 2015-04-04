@@ -1339,9 +1339,21 @@ char *mingw_getenv(const char *name)
 
 int mingw_putenv(const char *namevalue)
 {
+	wchar_t *wnamevalue;
+	int wlen;
+
+	/* update our UTF-8 encoded mingw_environ */
 	ALLOC_GROW(environ, (environ_size + 1) * sizeof(char*), environ_alloc);
 	environ_size = do_putenv(environ, namevalue, environ_size, 1);
-	return 0;
+
+	/* update MSVCRT and Win32 environments */
+	wlen = 2 * strlen(namevalue) + 2;
+	wnamevalue = alloca(wlen * sizeof(wchar_t));
+	xutftowcs(wnamevalue, namevalue, wlen);
+	/* append '=' in case of unsetenv() */
+	if (!wcschr(wnamevalue, L'='))
+		wcscat(wnamevalue, L"=");
+	return _wputenv(wnamevalue);
 }
 
 /*
