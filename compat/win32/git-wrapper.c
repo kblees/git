@@ -56,33 +56,6 @@ static void setup_environment(LPWSTR exepath, int full_path)
 	if (!GetEnvironmentVariable(L"PLINK_PROTOCOL", NULL, 0))
 		SetEnvironmentVariable(L"PLINK_PROTOCOL", L"ssh");
 
-	/* set HOME to %HOMEDRIVE%%HOMEPATH% or %USERPROFILE%
-	 * With roaming profiles: HOMEPATH is the roaming location and
-	 * USERPROFILE is the local location
-	 */
-	if (!GetEnvironmentVariable(L"HOME", NULL, 0)) {
-		LPWSTR e = NULL;
-		len = GetEnvironmentVariable(L"HOMEPATH", NULL, 0);
-		if (len == 0) {
-			len = GetEnvironmentVariable(L"USERPROFILE", NULL, 0);
-			if (len != 0) {
-				e = (LPWSTR)malloc(len * sizeof(WCHAR));
-				GetEnvironmentVariable(L"USERPROFILE", e, len);
-				SetEnvironmentVariable(L"HOME", e);
-				free(e);
-			}
-		}
-		else {
-			int n;
-			len += GetEnvironmentVariable(L"HOMEDRIVE", NULL, 0);
-			e = (LPWSTR)malloc(sizeof(WCHAR) * (len + 2));
-			n = GetEnvironmentVariable(L"HOMEDRIVE", e, len);
-			GetEnvironmentVariable(L"HOMEPATH", &e[n], len-n);
-			SetEnvironmentVariable(L"HOME", e);
-			free(e);
-		}
-	}
-
 	/* extend the PATH */
 	len = GetEnvironmentVariable(L"PATH", NULL, 0);
 	len = sizeof(WCHAR) * (len + 2 * MAX_PATH);
