@@ -6,21 +6,7 @@
 #include "strbuf.h"
 #include "cache.h"
 
-#if defined(HAVE_DEV_TTY) || defined(GIT_WINDOWS_NATIVE)
-
-static void restore_term(void);
-
-static void restore_term_on_signal(int sig)
-{
-	restore_term();
-	sigchain_pop(sig);
-	raise(sig);
-}
-
 #ifdef HAVE_DEV_TTY
-
-#define INPUT_PATH "/dev/tty"
-#define OUTPUT_PATH "/dev/tty"
 
 static int term_fd = -1;
 static struct termios old_term;
@@ -33,6 +19,13 @@ static void restore_term(void)
 	tcsetattr(term_fd, TCSAFLUSH, &old_term);
 	close(term_fd);
 	term_fd = -1;
+}
+
+static void restore_term_on_signal(int sig)
+{
+	restore_term();
+	sigchain_pop(sig);
+	raise(sig);
 }
 
 static int disable_echo(void)
@@ -56,69 +49,17 @@ error:
 	return -1;
 }
 
-#elif defined(GIT_WINDOWS_NATIVE)
-
-#define INPUT_PATH "CONIN$"
-#define OUTPUT_PATH "CONOUT$"
-#define FORCE_TEXT "t"
-
-static HANDLE hconin = INVALID_HANDLE_VALUE;
-static DWORD cmode;
-
-static void restore_term(void)
-{
-	if (hconin == INVALID_HANDLE_VALUE)
-		return;
-
-	SetConsoleMode(hconin, cmode);
-	CloseHandle(hconin);
-	hconin = INVALID_HANDLE_VALUE;
-}
-
-static int disable_echo(void)
-{
-	hconin = CreateFile("CONIN$", GENERIC_READ | GENERIC_WRITE,
-	    FILE_SHARE_READ, NULL, OPEN_EXISTING,
-	    FILE_ATTRIBUTE_NORMAL, NULL);
-	if (hconin == INVALID_HANDLE_VALUE)
-		return -1;
-
-	GetConsoleMode(hconin, &cmode);
-	sigchain_push_common(restore_term_on_signal);
-	if (!SetConsoleMode(hconin, cmode & (~ENABLE_ECHO_INPUT))) {
-		CloseHandle(hconin);
-		hconin = INVALID_HANDLE_VALUE;
-		return -1;
-	}
-
-	return 0;
-}
-
-static char *shell_prompt(const char *prompt, int echo);
-
-#endif
-
-#ifndef FORCE_TEXT
-#define FORCE_TEXT
-#endif
-
 char *git_terminal_prompt(const char *prompt, int echo)
 {
 	static struct strbuf buf = STRBUF_INIT;
 	int r;
 	FILE *input_fh, *output_fh;
-#ifdef GIT_WINDOWS_NATIVE
-	const char *term = getenv("TERM");
 
-	if (term && starts_with(term, "xterm"))
-		return shell_prompt(prompt, echo);
-#endif
-
-	input_fh = fopen(INPUT_PATH, "r" FORCE_TEXT);
+	input_fh = fopen("/dev/tty", "r");
 	if (!input_fh)
 		return NULL;
 
-	output_fh = fopen(OUTPUT_PATH, "w" FORCE_TEXT);
+	output_fh = fopen("/dev/tty", "w");
 	if (!output_fh) {
 		fclose(input_fh);
 		return NULL;
@@ -148,18 +89,16 @@ char *git_terminal_prompt(const char *prompt, int echo)
 	return buf.buf;
 }
 
-#else
+#elif !defined(GIT_WINDOWS_NATIVE)
 
 char *git_terminal_prompt(const char *prompt, int echo)
 {
 	return getpass(prompt);
 }
 
-#endif
+#else
 
-#ifdef GIT_WINDOWS_NATIVE
-
-static char *shell_prompt(const char *prompt, int echo)
+char *git_terminal_prompt(const char *prompt, int echo)
 {
 	const char *read_input[] = {
 		"sh", "-c", echo ?
