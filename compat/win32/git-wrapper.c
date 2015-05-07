@@ -316,7 +316,6 @@ int main(void)
 	WCHAR exepath[MAX_PATH], exe[MAX_PATH];
 	LPWSTR cmd = NULL, exep = exe, prefix_args = NULL, basename;
 	LPWSTR working_directory = NULL;
-	UINT codepage = 0;
 
 	/* Determine MSys2-based Git path. */
 	swprintf(msystem_bin, sizeof(msystem_bin),
@@ -431,10 +430,6 @@ int main(void)
 		}
 	}
 
-	/* set the console to ANSI/GUI codepage */
-	codepage = GetConsoleCP();
-	SetConsoleCP(GetACP());
-
 	{
 		STARTUPINFO si;
 		PROCESS_INFORMATION pi;
@@ -489,7 +484,5 @@ int main(void)
 
 	free(cmd);
 
-	/* reset the console codepage */
-	SetConsoleCP(codepage);
 	ExitProcess(r);
 }
