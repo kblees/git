@@ -104,29 +104,26 @@ static char *xterm_prompt(const char *prompt, int echo)
 	};
 	struct child_process child = CHILD_PROCESS_INIT;
 	static struct strbuf buffer = STRBUF_INIT;
-	int prompt_len = strlen(prompt), len = -1, code;
+	int prompt_len = strlen(prompt), len = -1;
 
 	child.argv = read_input;
 	child.in = -1;
 	child.out = -1;
 
-	code = start_command(&child);
-	if (code) {
+	if (start_command(&child)) {
 		error("Could not access xterm");
-		goto ret;
+		return NULL;
 	}
 
 	if (write_in_full(child.in, prompt, prompt_len) != prompt_len) {
 		error("Could not write to xterm");
 		close(child.in);
-		close(child.out);
 		goto ret;
 	}
 	close(child.in);
 
 	strbuf_reset(&buffer);
 	len = strbuf_read(&buffer, child.out, 1024);
-	close(child.out);
 	if (len < 0) {
 		error("Could not read from xterm");
 		goto ret;
@@ -136,8 +133,8 @@ static char *xterm_prompt(const char *prompt, int echo)
 	strbuf_strip_suffix(&buffer, "\r");
 
 ret:
-	if (!code)
-		finish_command(&child);
+	close(child.out);
+	finish_command(&child);
 
 	return len < 0 ? NULL : buffer.buf;
 }
