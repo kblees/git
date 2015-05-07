@@ -94,50 +94,7 @@ static int disable_echo(void)
 	return 0;
 }
 
-static char *shell_prompt(const char *prompt, int echo)
-{
-	const char *read_input[] = {
-		"sh", "-c", echo ?
-		"cat >/dev/tty && read -r line </dev/tty && echo \"$line\"" :
-		"cat >/dev/tty && read -r -s line </dev/tty && echo \"$line\" && echo >/dev/tty",
-		NULL
-	};
-	struct child_process child = CHILD_PROCESS_INIT;
-	static struct strbuf buffer = STRBUF_INIT;
-	int prompt_len = strlen(prompt), len = -1;
-
-	child.argv = read_input;
-	child.in = -1;
-	child.out = -1;
-
-	if (start_command(&child)) {
-		error("Could not spawn shell");
-		return NULL;
-	}
-
-	if (write_in_full(child.in, prompt, prompt_len) != prompt_len) {
-		error("Could not write to terminal");
-		close(child.in);
-		goto ret;
-	}
-	close(child.in);
-
-	strbuf_reset(&buffer);
-	len = strbuf_read(&buffer, child.out, 1024);
-	if (len < 0) {
-		error("Could not read from terminal");
-		goto ret;
-	}
-
-	strbuf_strip_suffix(&buffer, "\n");
-	strbuf_strip_suffix(&buffer, "\r");
-
-ret:
-	close(child.out);
-	finish_command(&child);
-
-	return len < 0 ? NULL : buffer.buf;
-}
+static char *shell_prompt(const char *prompt, int echo);
 
 #endif
 
@@ -196,6 +153,55 @@ char *git_terminal_prompt(const char *prompt, int echo)
 char *git_terminal_prompt(const char *prompt, int echo)
 {
 	return getpass(prompt);
+}
+
+#endif
+
+#ifdef GIT_WINDOWS_NATIVE
+
+static char *shell_prompt(const char *prompt, int echo)
+{
+	const char *read_input[] = {
+		"sh", "-c", echo ?
+		"cat >/dev/tty && read -r line </dev/tty && echo \"$line\"" :
+		"cat >/dev/tty && read -r -s line </dev/tty && echo \"$line\" && echo >/dev/tty",
+		NULL
+	};
+	struct child_process child = CHILD_PROCESS_INIT;
+	static struct strbuf buffer = STRBUF_INIT;
+	int prompt_len = strlen(prompt), len = -1;
+
+	child.argv = read_input;
+	child.in = -1;
+	child.out = -1;
+
+	if (start_command(&child)) {
+		error("Could not spawn shell");
+		return NULL;
+	}
+
+	if (write_in_full(child.in, prompt, prompt_len) != prompt_len) {
+		error("Could not write to terminal");
+		close(child.in);
+		goto ret;
+	}
+	close(child.in);
+
+	strbuf_reset(&buffer);
+	len = strbuf_read(&buffer, child.out, 1024);
+	if (len < 0) {
+		error("Could not read from terminal");
+		goto ret;
+	}
+
+	strbuf_strip_suffix(&buffer, "\n");
+	strbuf_strip_suffix(&buffer, "\r");
+
+ret:
+	close(child.out);
+	finish_command(&child);
+
+	return len < 0 ? NULL : buffer.buf;
 }
 
 #endif
