@@ -2234,6 +2234,13 @@ static void setup_windows_environment()
 		if (!tmp && (tmp = getenv("USERPROFILE")))
 			setenv("HOME", tmp, 1);
 	}
+
+	/*
+	 * Change 'core.symlinks' default to false, unless GIT_TEST_SYMLINKS is
+	 * defined. Thus we can run the test suite with or without symlink support.
+	 */
+	if (!getenv("GIT_TEST_SYMLINKS"))
+		has_symlinks = 0;
 }
 
 /*
