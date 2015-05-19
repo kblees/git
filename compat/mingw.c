@@ -231,6 +231,9 @@ static int retry_ask_yes_no(int *tries, const char *format, ...)
 	return result;
 }
 
+
+DECLARE_PROC_ADDR(kernel32.dll, BOOL, CreateSymbolicLinkW, LPCWSTR, LPCWSTR, DWORD);
+
 /* Normalizes NT paths as returned by some low-level APIs. */
 static wchar_t *normalize_ntpath(wchar_t *wbuf)
 {
@@ -2003,6 +2006,34 @@ int link(const char *oldpath, const char *newpath)
 		return -1;
 
 	if (!CreateHardLinkW(wnewpath, woldpath, NULL)) {
+		errno = err_win_to_posix(GetLastError());
+		return -1;
+	}
+	return 0;
+}
+
+int symlink(const char *oldpath, const char *newpath)
+{
+	wchar_t woldpath[MAX_LONG_PATH], wnewpath[MAX_LONG_PATH];
+	int len;
+
+	/* fail if symlinks are disabled or API is not supported (WinXP) */
+	if (!has_symlinks || !INIT_PROC_ADDR(CreateSymbolicLinkW)) {
+		errno = ENOSYS;
+		return -1;
+	}
+
+	if ((len = xutftowcs_long_path(woldpath, oldpath)) < 0
+			|| xutftowcs_long_path(wnewpath, newpath) < 0)
+		return -1;
+
+	/* convert target dir separators to backslashes */
+	while (len--)
+		if (woldpath[len] == '/')
+			woldpath[len] = '\\';
+
+	/* create file symlink */
+	if (!CreateSymbolicLinkW(wnewpath, woldpath, 0)) {
 		errno = err_win_to_posix(GetLastError());
 		return -1;
 	}
